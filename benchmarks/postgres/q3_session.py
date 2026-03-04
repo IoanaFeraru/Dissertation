@@ -61,14 +61,7 @@ load_dotenv()
 # own connection from a pool. Sharing one connection across 50 threads would
 # serialise all queries through a single socket — not what we are measuring.
 
-def get_connection():
-    return psycopg2.connect(
-        host="localhost",
-        port=5432,
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        dbname=os.getenv("POSTGRES_DB"),
-    )
+from pg_conn import get_connection
 
 # ── query ─────────────────────────────────────────────────────────────────────
 #

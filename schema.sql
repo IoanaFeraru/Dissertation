@@ -370,3 +370,5 @@ CREATE INDEX idx_events_user_time   ON events (user_id, occurred_at DESC);
 CREATE INDEX idx_events_type        ON events (event_type);
 CREATE INDEX idx_events_product_id  ON events (product_id);
 CREATE INDEX idx_events_occurred_at ON events (occurred_at DESC);
+
+CREATE INDEX idx_invoices_type_status_created ON invoices (invoice_type, status, created_at);

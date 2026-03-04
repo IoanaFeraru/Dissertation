@@ -37,21 +37,6 @@
 
 ---
 
-## Phase 2 — PostgreSQL Baseline Queries `Week 4`
-
-### PostgreSQL Benchmark Queries (Q1–Q7)
-- [ ] Run all 7 read baselines, 1000 iterations each, save to `results/postgres_q{1-7}_baseline.json`
-
-### PostgreSQL Write Baseline (Q8)
-- [ ] Save to `results/postgres_q8_write_baseline.json`
-
-### PostgreSQL Scalability Baseline (for Chart 3)
-- [ ] Re-run Q1–Q7 at two reduced data scales to establish the PostgreSQL scalability curve:
-  - [ ] Save to `results/postgres_q{1-7}_scale10.json` and `results/postgres_q{1-7}_scale50.json`
-
-**✅ Phase 2 Deliverable:** All 7 read queries + Q8 write baseline + scalability baselines benchmarked on PostgreSQL, results saved to `results/`.
----
-
 ## Phase 3 — Naive Specialised Implementations `Weeks 5–7`
 
 > Port the schema to each specialised DB with minimal changes. No optimisation yet — just get the query running.
@@ -363,7 +348,7 @@
 |---|---------------|---|---|
 | 0 — Environment Setup | ✅ Complete    | — | 2026-02-20 |
 | 1 — Schema & Data Generation | ✅ Complete    | — | 2026-02-24 |
-| 2 — PostgreSQL Baselines | ⬜ 2026-03-04  | 2026-03-01 | — |
+| 2 — PostgreSQL Baselines | ✅ Complete   | — | 2026-03-04 |
 | 3 — Naive Specialised | ⬜ Not started | 2026-03-08 | — |
 | 4 — Optimised Specialised | ⬜ Not started | 2026-03-18 | — |
 | 5 — Analysis & Visualisation | ⬜ Not started | 2026-04-01 | — |

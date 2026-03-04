@@ -16,6 +16,7 @@ summary table at the end.
 Results are saved individually per query AND as a combined summary.
 
 Usage:
+    cd benchmarks\postgres
     python run_all.py                        # full run, all 8 benchmarks
     python run_all.py --skip-q8              # skip write benchmark (reads only)
     python run_all.py --iterations 100       # reduced iterations (smoke test)

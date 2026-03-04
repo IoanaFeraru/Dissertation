@@ -69,14 +69,7 @@ DATASET_END   = date(2025, 12, 31) - timedelta(days=WINDOW_DAYS)
 
 # -- connection ----------------------------------------------------------------
 
-def get_connection():
-    return psycopg2.connect(
-        host="localhost",
-        port=5432,
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        dbname=os.getenv("POSTGRES_DB"),
-    )
+from pg_conn import get_connection
 
 # -- query --------------------------------------------------------------------
 #

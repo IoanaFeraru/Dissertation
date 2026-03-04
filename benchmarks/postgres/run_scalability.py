@@ -67,15 +67,7 @@ def warn(msg): print(f"  {YELLOW}! {msg}{RESET}")
 
 # ── connection ────────────────────────────────────────────────────────────────
 
-def get_connection():
-    return psycopg2.connect(
-        host="localhost",
-        port=5432,
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        dbname=os.getenv("POSTGRES_DB"),
-        connect_timeout=10,
-    )
+from pg_conn import get_connection
 
 # ── cutoff computation ────────────────────────────────────────────────────────
 
@@ -335,17 +327,33 @@ def fetch_invoice_id_pool(conn, cutoff, pool_size=1000):
         raise RuntimeError(f"No invoices before {cutoff}")
     return [str(r[0]) for r in rows]
 
-def fetch_user_id_pool_sessions(conn, cutoff, pool_size=1000):
+def fetch_user_id_pool_sessions(conn, scale_pct, pool_size=1000):
+    """
+    Q3 uses row-based scaling rather than date-range scaling.
+    Sessions were all generated in 2025 so a date cutoff returns zero rows.
+    Instead we sample a fraction of the total sessions table:
+      10% scale -> pool drawn from 10% of all distinct session user_ids
+      50% scale -> pool drawn from 50% of all distinct session user_ids
+    This measures whether lookup latency changes as the concurrent user
+    pool size shrinks, which is the meaningful scalability question for Q3.
+    """
     with conn.cursor() as cur:
+        # Total distinct users with sessions
+        cur.execute("SELECT COUNT(DISTINCT user_id) FROM sessions;")
+        total = cur.fetchone()[0]
+        limit = max(1, int(total * scale_pct / 100))
         cur.execute("""
             SELECT user_id FROM (
-                SELECT DISTINCT user_id FROM sessions WHERE created_at < %s
+                SELECT DISTINCT user_id FROM sessions
             ) AS s ORDER BY RANDOM() LIMIT %s;
-        """, (cutoff, pool_size))
+        """, (limit,))
         rows = cur.fetchall()
     if not rows:
-        raise RuntimeError(f"No sessions before {cutoff}")
-    return [str(r[0]) for r in rows]
+        raise RuntimeError("No sessions found in the sessions table")
+    # Return up to pool_size random IDs drawn from the scaled subset
+    import random
+    ids = [str(r[0]) for r in rows]
+    return random.choices(ids, k=min(pool_size, len(ids)))
 
 def fetch_product_id_pool(conn, cutoff, pool_size=1000):
     with conn.cursor() as cur:
@@ -423,6 +431,33 @@ def make_q3_fn(conn, user_ids, cutoff):
             cur.fetchone()
     return _run
 
+def make_q3_fn_no_cutoff(conn, user_ids):
+    """
+    Q3 scalability variant — no date cutoff, pool size controls scale.
+    Uses the same query as the full-scale baseline (no created_at filter)
+    but draws user IDs from a scaled-down pool.
+    """
+    import threading
+    local = threading.local()
+    def _get_conn():
+        if not getattr(local, "conn", None) or local.conn.closed:
+            local.conn = get_connection()
+        return local.conn
+    def _run():
+        c = _get_conn()
+        uid = random.choice(user_ids)
+        with c.cursor() as cur:
+            cur.execute("""
+                SELECT s.id, s.user_id, s.cart, s.ip_address,
+                       s.user_agent, s.created_at, s.last_active_at, s.expires_at
+                FROM sessions s
+                WHERE s.user_id = %s
+                ORDER BY s.last_active_at DESC
+                LIMIT 1;
+            """, (uid,))
+            cur.fetchone()
+    return _run
+
 def make_q4_fn(conn, product_ids, cutoff):
     def _run():
         pid = random.choice(product_ids)
@@ -478,10 +513,17 @@ def run_scaled_query(
     """Run one scaled query and save the result. Returns the result dict."""
     suffix      = f"scale{scale_pct}"
     output_path = os.path.join(results_dir, f"postgres_{query_id.lower()}_{suffix}.json")
-    label       = (
-        f"{query_id} at {scale_pct}% scale — date range cutoff: {cutoff}. "
-        f"Same query as full-scale baseline with additional created_at/occurred_at filter."
-    )
+    if query_id == "Q3":
+        label = (
+            f"Q3 at {scale_pct}% scale — row-based scaling: user pool drawn from "
+            f"{scale_pct}% of total session users. No date cutoff applied. "
+            f"Sessions were generated in 2025 making date-range scaling inapplicable."
+        )
+    else:
+        label = (
+            f"{query_id} at {scale_pct}% scale — date range cutoff: {cutoff}. "
+            f"Same query as full-scale baseline with additional created_at/occurred_at filter."
+        )
 
     try:
         if query_id == "Q1":
@@ -492,8 +534,9 @@ def run_scaled_query(
             query_fn = make_q2_fn(conn, pool, cutoff)
             concurrency = 1
         elif query_id == "Q3":
-            pool     = fetch_user_id_pool_sessions(conn, cutoff)
-            query_fn = make_q3_fn(conn, pool, cutoff)
+            # Q3 uses row-based scaling (see fetch_user_id_pool_sessions)
+            pool     = fetch_user_id_pool_sessions(conn, scale_pct)
+            query_fn = make_q3_fn_no_cutoff(conn, pool)
             concurrency = 50
         elif query_id == "Q4":
             pool     = fetch_product_id_pool(conn, cutoff)
