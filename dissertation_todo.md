@@ -44,7 +44,7 @@
 - [ ] Sanity check results — flag anything abnormal
 
 ### PostgreSQL Write Baseline (Q8)
-- [ ] **Q8** Bulk-insert 1M events into PostgreSQL using `COPY` (fastest available write path — this is the ceiling)
+- [ ] **Q8** Bulk-insert 1M events into PostgreSQL
   - [ ] Batch size: 10K rows per batch
   - [ ] Record total time, throughput (rows/sec), p95/p99 insert latency per batch
   - [ ] Record CPU and memory usage via Docker stats API (`docker stats dissertation_postgres`)
