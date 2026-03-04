@@ -41,26 +41,15 @@
 
 ### PostgreSQL Benchmark Queries (Q1–Q7)
 - [ ] Run all 7 read baselines, 1000 iterations each, save to `results/postgres_q{1-7}_baseline.json`
-- [ ] Sanity check results — flag anything abnormal
 
 ### PostgreSQL Write Baseline (Q8)
-- [ ] **Q8** Bulk-insert 1M events into PostgreSQL
-  - [ ] Batch size: 10K rows per batch
-  - [ ] Record total time, throughput (rows/sec), p95/p99 insert latency per batch
-  - [ ] Record CPU and memory usage via Docker stats API (`docker stats dissertation_postgres`)
-  - [ ] This is the baseline all specialised DBs are compared against in Phase 3 and 4
 - [ ] Save to `results/postgres_q8_write_baseline.json`
 
 ### PostgreSQL Scalability Baseline (for Chart 3)
 - [ ] Re-run Q1–Q7 at two reduced data scales to establish the PostgreSQL scalability curve:
-  - [ ] 10% scale (~500K events, ~50K orders) — filter by earliest 10% of `occurred_at` range
-  - [ ] 50% scale — filter by earliest 50% of `occurred_at` range
-  - [ ] Full scale results already captured above (100%)
   - [ ] Save to `results/postgres_q{1-7}_scale10.json` and `results/postgres_q{1-7}_scale50.json`
-- [ ] Note: do not regenerate data — use date range filters on the existing loaded dataset
 
 **✅ Phase 2 Deliverable:** All 7 read queries + Q8 write baseline + scalability baselines benchmarked on PostgreSQL, results saved to `results/`.
-
 ---
 
 ## Phase 3 — Naive Specialised Implementations `Weeks 5–7`
