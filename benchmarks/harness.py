@@ -1,227 +1,229 @@
 """
-benchmarks/harness.py — Universal Benchmarking Harness
-=======================================================
-Runs any query function N times, records per-run latency in milliseconds,
-computes p50/p95/p99, supports concurrent execution via threading, and
-saves results to JSON with full metadata.
+benchmarks/harness.py — Benchmarking Harness
+=============================================
+Core utility used by every benchmark in Phases 2–4.
 
-Usage (from any benchmark module):
-    from benchmarks.harness import run_benchmark
+Responsibilities:
+  - Run a query function N times and record per-run latency in milliseconds
+  - Discard the first 10 runs as warm-up
+  - Compute p50, p95, p99, mean, std dev, min, max
+  - Support concurrent execution via threading (for Q3, Q8, etc.)
+  - Save results to JSON with full metadata and raw timings
 
-    def my_query(conn):
-        cur = conn.cursor()
-        cur.execute("SELECT 1")
-        cur.fetchall()
+Usage (single-threaded):
+    from harness import run_benchmark
+
+    def my_query():
+        # execute your query here
+        pass
 
     run_benchmark(
         query_fn=my_query,
-        get_conn_fn=get_pg_conn,
-        db="postgresql",
+        db="postgres",
         query_id="Q1",
-        n_iterations=1000,
+        iterations=1000,
         concurrency=1,
         output_path="results/postgres_q1_baseline.json",
+    )
+
+Usage (concurrent):
+    run_benchmark(
+        query_fn=my_query,
+        db="redis",
+        query_id="Q3",
+        iterations=1000,
+        concurrency=50,                # 50 concurrent threads
+        output_path="results/redis_q3_baseline.json",
     )
 """
 
 import json
+import math
 import os
-import time
 import threading
-import statistics
+import time
 from datetime import datetime, timezone
 from typing import Callable
 
+# ── constants ─────────────────────────────────────────────────────────────────
 
-# ── Percentile helper ─────────────────────────────────────────────────────────
+WARMUP_RUNS = 10          # runs discarded before timing begins
+DEFAULT_ITERATIONS = 1000 # measured runs (excludes warm-up)
 
-def percentile(data: list[float], p: float) -> float:
-    """Return the p-th percentile of a list (interpolated)."""
-    if not data:
-        raise ValueError("Empty data list")
-    s = sorted(data)
-    k = (len(s) - 1) * (p / 100)
-    lo, hi = int(k), min(int(k) + 1, len(s) - 1)
-    return s[lo] + (k - lo) * (s[hi] - s[lo])
+# ── statistics helpers ────────────────────────────────────────────────────────
 
-
-# ── Thread worker ─────────────────────────────────────────────────────────────
-
-def _worker(
-    query_fn: Callable,
-    get_conn_fn: Callable,
-    iterations: int,
-    latencies: list[float],
-    errors: list[str],
-    lock: threading.Lock,
-    warm_up: bool = False,
-):
+def _percentile(sorted_data: list[float], pct: float) -> float:
     """
-    Opens its own connection, runs query_fn `iterations` times,
-    appends each elapsed ms to the shared latencies list under a lock.
-    Connections are closed after the worker finishes.
+    Compute a percentile from a pre-sorted list using nearest-rank method.
+    pct should be in range 0–100.
     """
-    try:
-        conn = get_conn_fn()
-    except Exception as e:
+    if not sorted_data:
+        return 0.0
+    k = math.ceil((pct / 100) * len(sorted_data)) - 1
+    k = max(0, min(k, len(sorted_data) - 1))
+    return round(sorted_data[k], 4)
+
+
+def _compute_stats(timings_ms: list[float]) -> dict:
+    """
+    Given a list of raw latencies in milliseconds, return a stats dict.
+    Input list is NOT required to be sorted — this function sorts it internally.
+    """
+    if not timings_ms:
+        raise ValueError("No timings to compute statistics on.")
+
+    sorted_t = sorted(timings_ms)
+    n = len(sorted_t)
+    mean = sum(sorted_t) / n
+    variance = sum((x - mean) ** 2 for x in sorted_t) / n
+
+    return {
+        "p50":     _percentile(sorted_t, 50),
+        "p95":     _percentile(sorted_t, 95),
+        "p99":     _percentile(sorted_t, 99),
+        "mean":    round(mean, 4),
+        "std_dev": round(math.sqrt(variance), 4),
+        "min":     round(sorted_t[0], 4),
+        "max":     round(sorted_t[-1], 4),
+    }
+
+# ── single-threaded runner ────────────────────────────────────────────────────
+
+def _run_single(query_fn: Callable, total_runs: int) -> list[float]:
+    """
+    Execute query_fn (total_runs + WARMUP_RUNS) times sequentially.
+    Returns only the measured timings (warm-up discarded).
+    """
+    # warm-up — not timed
+    for _ in range(WARMUP_RUNS):
+        query_fn()
+
+    # measured runs
+    timings = []
+    for _ in range(total_runs):
+        start = time.perf_counter()
+        query_fn()
+        elapsed_ms = (time.perf_counter() - start) * 1_000
+        timings.append(elapsed_ms)
+
+    return timings
+
+# ── concurrent runner ─────────────────────────────────────────────────────────
+
+def _run_concurrent(query_fn: Callable, total_runs: int, concurrency: int) -> list[float]:
+    """
+    Execute query_fn across `concurrency` threads.
+
+    Each thread runs its share of (total_runs / concurrency) measured iterations,
+    preceded by WARMUP_RUNS warm-up calls. All threads start simultaneously via
+    a threading.Barrier so the concurrency pressure is real.
+
+    Returns the combined list of all measured timings across all threads.
+    """
+    runs_per_thread = max(1, total_runs // concurrency)
+    barrier = threading.Barrier(concurrency)
+    all_timings: list[float] = []
+    lock = threading.Lock()
+
+    def worker():
+        # warm-up before the barrier — avoids polluting the timed window
+        for _ in range(WARMUP_RUNS):
+            query_fn()
+
+        # all threads block here until every worker is ready
+        barrier.wait()
+
+        local_timings = []
+        for _ in range(runs_per_thread):
+            start = time.perf_counter()
+            query_fn()
+            elapsed_ms = (time.perf_counter() - start) * 1_000
+            local_timings.append(elapsed_ms)
+
         with lock:
-            errors.append(f"Connection failed: {e}")
-        return
+            all_timings.extend(local_timings)
 
-    try:
-        for i in range(iterations):
-            t0 = time.perf_counter()
-            try:
-                query_fn(conn)
-            except Exception as e:
-                with lock:
-                    errors.append(f"Iteration {i}: {e}")
-                continue
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            if not warm_up:
-                with lock:
-                    latencies.append(elapsed_ms)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(concurrency)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
+    return all_timings
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── public API ────────────────────────────────────────────────────────────────
 
 def run_benchmark(
     query_fn: Callable,
-    get_conn_fn: Callable,
     db: str,
     query_id: str,
-    n_iterations: int = 1000,
+    iterations: int = DEFAULT_ITERATIONS,
     concurrency: int = 1,
     output_path: str | None = None,
-    warm_up_iterations: int = 10,
-    extra_metadata: dict | None = None,
+    label: str | None = None,
 ) -> dict:
     """
-    Benchmark `query_fn` across `concurrency` threads for `n_iterations` total.
+    Run a benchmark and return (and optionally save) the result dict.
 
     Parameters
     ----------
-    query_fn           : callable(conn) — executes the query. Must be thread-safe
-                         (each thread has its own connection).
-    get_conn_fn        : callable() → connection — called once per thread.
-    db                 : database label for the result (e.g. "postgresql").
-    query_id           : query label (e.g. "Q1").
-    n_iterations       : total measured iterations split across all threads.
-    concurrency        : number of concurrent threads.
-    output_path        : if given, result dict is saved here as JSON.
-    warm_up_iterations : discarded iterations before measurement begins.
-    extra_metadata     : any extra fields to embed in the output JSON.
+    query_fn    : zero-argument callable that executes one query/operation.
+    db          : database name for metadata, e.g. "postgres", "redis".
+    query_id    : benchmark identifier, e.g. "Q1", "Q3", "Q8_naive".
+    iterations  : number of *measured* runs (warm-up runs are additional).
+    concurrency : number of concurrent threads. Use 1 for sequential runs.
+    output_path : if provided, result JSON is written to this path.
+    label       : optional human-readable description saved in the result.
 
     Returns
     -------
-    dict with stats, config, errors, and a downsampled latency sample.
+    dict with keys: db, query_id, timestamp, iterations, warmup_runs,
+                    concurrency, label, latency_ms, raw_timings_ms
     """
-    G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"; B = "\033[94m"; E = "\033[0m"
-    print(f"\n{'─' * 56}")
-    print(f"  {B}Benchmark:{E} {db.upper()} / {query_id}")
-    print(f"  Iterations: {n_iterations}  |  Concurrency: {concurrency}")
-    print(f"{'─' * 56}")
+    print(f"\n  Running {db.upper()} {query_id}"
+          f" — {iterations} iterations"
+          f" × {concurrency} thread(s)"
+          f" (+{WARMUP_RUNS} warm-up)")
 
-    # ── Warm-up (single thread, results discarded) ──
-    if warm_up_iterations > 0:
-        print(f"  Warming up ({warm_up_iterations} iterations)…")
-        _wl: list[float] = []; _we: list[str] = []; _wlk = threading.Lock()
-        _worker(query_fn, get_conn_fn, warm_up_iterations, _wl, _we, _wlk, warm_up=True)
-        if _we:
-            print(f"  {Y}⚠ Warm-up errors: {_we[:2]}{E}")
+    wall_start = time.perf_counter()
 
-    # ── Distribute iterations across threads ──
-    base, rem = divmod(n_iterations, concurrency)
-    iters_per_thread = [base + (1 if i < rem else 0) for i in range(concurrency)]
+    if concurrency <= 1:
+        timings = _run_single(query_fn, iterations)
+    else:
+        timings = _run_concurrent(query_fn, iterations, concurrency)
 
-    latencies: list[float] = []
-    errors:    list[str]   = []
-    lock = threading.Lock()
+    wall_elapsed = time.perf_counter() - wall_start
 
-    t_start = time.perf_counter()
-    threads = [
-        threading.Thread(
-            target=_worker,
-            args=(query_fn, get_conn_fn, iters_per_thread[i], latencies, errors, lock),
-            daemon=True,
-        )
-        for i in range(concurrency)
-    ]
-    for t in threads: t.start()
-    for t in threads: t.join()
-    wall_ms = (time.perf_counter() - t_start) * 1000
-
-    if not latencies:
-        raise RuntimeError(f"No measurements collected. Errors: {errors[:5]}")
-
-    n   = len(latencies)
-    p50 = percentile(latencies, 50)
-    p95 = percentile(latencies, 95)
-    p99 = percentile(latencies, 99)
-    avg = statistics.mean(latencies)
-    sd  = statistics.stdev(latencies) if n > 1 else 0.0
-    mn  = min(latencies)
-    mx  = max(latencies)
-    qps = n / (wall_ms / 1000)
-
-    print(f"  Collected  : {n}")
-    print(f"  p50 / p95 / p99 : {p50:.2f} / {p95:.2f} / {p99:.2f} ms")
-    print(f"  mean ± stdev    : {avg:.2f} ± {sd:.2f} ms")
-    print(f"  min / max       : {mn:.2f} / {mx:.2f} ms")
-    print(f"  throughput      : {qps:.1f} qps")
-    if errors:
-        print(f"  {Y}⚠ Errors  : {len(errors)} (first: {errors[0][:120]}){E}")
+    stats = _compute_stats(timings)
 
     result = {
-        "db": db,
-        "query_id": query_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "config": {
-            "n_iterations": n_iterations,
-            "concurrency": concurrency,
-            "warm_up_iterations": warm_up_iterations,
-        },
-        "stats": {
-            "n_collected": n,
-            "p50_ms":  round(p50, 4),
-            "p95_ms":  round(p95, 4),
-            "p99_ms":  round(p99, 4),
-            "mean_ms": round(avg, 4),
-            "stdev_ms": round(sd, 4),
-            "min_ms":  round(mn, 4),
-            "max_ms":  round(mx, 4),
-            "total_wall_ms": round(wall_ms, 2),
-            "throughput_qps": round(qps, 2),
-        },
-        "errors": errors[:20],
-        # Downsample to ≤500 points to keep the JSON file small
-        "latency_sample_ms": [round(v, 4) for v in latencies[::max(1, n // 500)]],
-        **(extra_metadata or {}),
+        "db":             db,
+        "query_id":       query_id,
+        "label":          label or "",
+        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "iterations":     len(timings),          # actual measured runs
+        "warmup_runs":    WARMUP_RUNS,
+        "concurrency":    concurrency,
+        "wall_time_s":    round(wall_elapsed, 3),
+        "latency_ms":     stats,
+        "raw_timings_ms": [round(t, 4) for t in timings],
     }
 
+    # ── print summary ─────────────────────────────────────────────────────────
+    print(f"  {'─' * 46}")
+    print(f"  {'Wall time':<20} {result['wall_time_s']:.2f}s")
+    print(f"  {'p50':<20} {stats['p50']:.2f} ms")
+    print(f"  {'p95':<20} {stats['p95']:.2f} ms")
+    print(f"  {'p99':<20} {stats['p99']:.2f} ms")
+    print(f"  {'mean ± std':<20} {stats['mean']:.2f} ± {stats['std_dev']:.2f} ms")
+    print(f"  {'min / max':<20} {stats['min']:.2f} / {stats['max']:.2f} ms")
+    print(f"  {'─' * 46}")
+
+    # ── save to file ──────────────────────────────────────────────────────────
     if output_path:
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
-        print(f"  {G}✔ Saved → {output_path}{E}")
+        print(f"  Saved → {output_path}")
 
     return result
-
-
-def sanity_check(result: dict, warn_ms: float = 500.0, fail_ms: float = 5000.0) -> bool:
-    """Print a one-line sanity summary. Returns False if p99 exceeds fail_ms."""
-    G = "\033[92m"; Y = "\033[93m"; R = "\033[91m"; E = "\033[0m"
-    s   = result["stats"]
-    tag = f"{result['db']}/{result['query_id']}"
-    p99, p50 = s["p99_ms"], s["p50_ms"]
-    if p99 > fail_ms:
-        print(f"  {R}✘ FAIL  {tag}: p99={p99:.0f}ms > {fail_ms:.0f}ms{E}"); return False
-    elif p99 > warn_ms:
-        print(f"  {Y}⚠ WARN  {tag}: p99={p99:.0f}ms > {warn_ms:.0f}ms{E}"); return True
-    else:
-        print(f"  {G}✔ OK    {tag}: p50={p50:.1f}ms  p99={p99:.1f}ms{E}"); return True
