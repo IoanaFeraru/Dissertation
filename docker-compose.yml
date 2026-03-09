@@ -33,6 +33,11 @@ services:
 
   # ------------------------------------------------------------
   # 2. MongoDB — Document store
+  # Two logical databases are used (naive + optimised) but both
+  # live on this single MongoDB instance. MONGO_INITDB_DATABASE
+  # points at the naive DB so the root user is initialised with
+  # access to it; the optimised DB is created automatically by
+  # the optimised loader when it first writes to it.
   # ------------------------------------------------------------
   mongodb:
     image: mongo:7.0

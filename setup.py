@@ -2,6 +2,7 @@
 setup.py — Phase 0 Health Check
 ================================
 Connects to all 7 databases and prints OK / FAIL for each.
+MongoDB is checked twice — once for the naive DB, once for optimised.
 
 Usage:
     python setup.py               # runs health check
@@ -28,10 +29,10 @@ YELLOW = "\033[93m"
 RESET  = "\033[0m"
 
 def ok(name):
-    print(f"  {GREEN}✔ {name:<20} OK{RESET}")
+    print(f"  {GREEN}✔ {name:<32} OK{RESET}")
 
 def fail(name, error):
-    print(f"  {RED}✘ {name:<20} FAIL — {error}{RESET}")
+    print(f"  {RED}✘ {name:<32} FAIL — {error}{RESET}")
 
 def warn(msg):
     print(f"  {YELLOW}⚠ {msg}{RESET}")
@@ -52,18 +53,29 @@ def check_postgres():
     ok("PostgreSQL")
     return True
 
-def check_mongodb():
+def _check_mongo_db(env_var: str, label: str) -> bool:
+    """Shared logic for checking a named MongoDB database."""
     from pymongo import MongoClient
-    user = os.getenv("MONGO_USER")
+    user     = os.getenv("MONGO_USER")
     password = os.getenv("MONGO_PASSWORD")
+    db_name  = os.getenv(env_var)
+    if not db_name:
+        raise RuntimeError(f"{env_var} not set in .env")
     client = MongoClient(
         f"mongodb://{user}:{password}@localhost:27017/",
         serverSelectionTimeoutMS=5000,
     )
     client.admin.command("ping")
+    count = len(client[db_name].list_collection_names())
     client.close()
-    ok("MongoDB")
+    ok(f"{label} ({db_name}, {count} collections)")
     return True
+
+def check_mongodb_naive():
+    return _check_mongo_db("MONGO_DB_NAIVE", "MongoDB naive")
+
+def check_mongodb_optimised():
+    return _check_mongo_db("MONGO_DB_OPTIMISED", "MongoDB optimised")
 
 def check_redis():
     import redis
@@ -79,9 +91,9 @@ def check_redis():
 
 def check_neo4j():
     from neo4j import GraphDatabase
-    user = os.getenv("NEO4J_USER")
+    user     = os.getenv("NEO4J_USER")
     password = os.getenv("NEO4J_PASSWORD")
-    driver = GraphDatabase.driver(
+    driver   = GraphDatabase.driver(
         "bolt://localhost:7687",
         auth=(user, password),
         connection_timeout=5,
@@ -142,53 +154,69 @@ def check_timescaledb():
 
 # ── runner ────────────────────────────────────────────────────────────────────
 
+# MongoDB optimised is marked optional=True — it will legitimately be empty
+# until the optimised loader has been run, and that should not block other work.
 CHECKS = [
-    ("PostgreSQL",     check_postgres),
-    ("MongoDB",        check_mongodb),
-    ("Redis",          check_redis),
-    ("Neo4j",          check_neo4j),
-    ("Elasticsearch",  check_elasticsearch),
-    ("Cassandra",      check_cassandra),
-    ("TimescaleDB",    check_timescaledb),
+    ("PostgreSQL",          check_postgres,           False),
+    ("MongoDB naive",       check_mongodb_naive,      False),
+    ("MongoDB optimised",   check_mongodb_optimised,  True),   # optional until loader runs
+    ("Redis",               check_redis,              False),
+    ("Neo4j",               check_neo4j,              False),
+    ("Elasticsearch",       check_elasticsearch,      False),
+    ("Cassandra",           check_cassandra,          False),
+    ("TimescaleDB",         check_timescaledb,        False),
 ]
 
 def run_checks(wait=False, max_wait_seconds=120):
-    print("\n" + "═" * 50)
+    print("\n" + "═" * 55)
     print("  Dissertation — Database Health Check")
-    print("═" * 50)
+    print("═" * 55)
 
-    results = {}
+    results  = {}
     deadline = time.time() + max_wait_seconds
 
-    for name, check_fn in CHECKS:
-        attempts = 0
+    for name, check_fn, optional in CHECKS:
         while True:
-            attempts += 1
             try:
                 check_fn()
                 results[name] = True
                 break
             except Exception as e:
                 if wait and time.time() < deadline:
-                    print(f"  {YELLOW}⟳ {name:<20} not ready yet, retrying in 5s...{RESET}")
+                    print(f"  {YELLOW}⟳ {name:<32} not ready yet, retrying in 5s...{RESET}")
                     time.sleep(5)
                 else:
-                    fail(name, str(e))
-                    results[name] = False
+                    if optional:
+                        print(f"  {YELLOW}○ {name:<32} not loaded yet (optional){RESET}")
+                    else:
+                        fail(name, str(e))
+                    results[name] = optional  # optional failures do not count as failures
                     break
 
-    # ── summary ──
-    print("\n" + "─" * 50)
+    # ── summary ──────────────────────────────────────────────────────────────
+    print("\n" + "─" * 55)
     passed = sum(1 for v in results.values() if v)
     total  = len(results)
-    print(f"  Result: {passed}/{total} databases reachable\n")
+    hard_failures = [
+        name for (name, _, optional), result
+        in zip(CHECKS, results.values())
+        if not result and not optional
+    ]
 
-    if passed == total:
-        print(f"  {GREEN}All systems GO — ready to proceed to Phase 1{RESET}\n")
+    print(f"  Result: {passed}/{total} checks passed\n")
+
+    if not hard_failures:
+        print(f"  {GREEN}All systems GO{RESET}\n")
+        optional_skipped = [
+            name for (name, _, optional) in CHECKS
+            if optional and not results.get(name)
+        ]
+        if optional_skipped:
+            for name in optional_skipped:
+                warn(f"{name} not yet loaded — run the optimised loader when ready")
         return 0
     else:
-        failed = [name for name, v in results.items() if not v]
-        print(f"  {RED}Fix the following before proceeding: {', '.join(failed)}{RESET}\n")
+        print(f"  {RED}Fix the following before proceeding: {', '.join(hard_failures)}{RESET}\n")
         if not wait:
             warn("Tip: run with --wait if containers are still starting up")
         return 1

@@ -96,7 +96,7 @@ SUBSCRIPTION_TIER_PRICING = [
 def get_mongo_db():
     user     = os.getenv("MONGO_USER")
     password = os.getenv("MONGO_PASSWORD")
-    db_name  = os.getenv("MONGO_DB", "dissertation")
+    db_name  = os.getenv("MONGO_DB_NAIVE", "dissertation")
     client   = MongoClient(
         f"mongodb://{user}:{password}@localhost:27017/",
         serverSelectionTimeoutMS=30_000,

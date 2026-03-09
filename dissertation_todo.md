@@ -127,19 +127,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 
 ### MongoDB
 
-#### Optimised — Load
-
-**Schema redesign:**
-- [ ] Embed `invoice_lines` array directly inside invoice documents
-- [ ] Embed denormalised customer snapshot (name, email) inside invoice
-- [ ] Embed product name + type snapshot inside each line item
-- [ ] Store cart as a native array of objects inside session document (not JSON string)
-- [ ] Store event metadata as native subdocument (not JSON string)
-- [ ] Add compound indexes: (user_id + created_at) on invoices, (user_id + occurred_at) on events
-
-**Loader** (`loaders/mongodb_optimised_loader.py`):
-- [ ] Load all 12 tables with the redesigned schema above
-
 #### Optimised — Benchmark
 
 **Benchmarks** (`benchmarks/mongodb/optimised_query.py`):
@@ -150,7 +137,7 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Q5 — Product search: `$text` with weighted fields (`$meta: "textScore"` sorting)
 - [ ] Q6 — User events: compound index scan on (user_id, occurred_at)
 - [ ] Q7 — Rolling revenue: `$setWindowFields` with `$sum` window function
-- [ ] Document changes in `benchmarks/mongodb/CHANGES.md`
+- [ ] Document changes in each q_.py file
 - [ ] Run 1000 iterations per query (50 warm-up) with harness
 - [ ] Save to `results/mongodb_optimised_Q{n}.json` for Q1–Q7
 
@@ -544,7 +531,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 ## Phase 5 — Writing
 
 ### Methodology and Tools (write first — can be done during benchmark run time)
-- [ ] Unified schema rationale
 - [ ] Benchmark harness design (p50/p95/p99, threading, warm-up)
 - [ ] Full-scope benchmark rationale — why all queries run on all DBs (engine effect vs schema effect)
 - [ ] PostgreSQL baseline design and query implementations
