@@ -1,5 +1,5 @@
 """
-create_schema.py — Phase 1: PostgreSQL Master Schema
+create_baseline_schema.py — Phase 1: PostgreSQL Master Schema
 =====================================================
 1. Connects to the PostgreSQL Docker container
 2. Creates all 12 tables from schema.sql
@@ -7,9 +7,9 @@ create_schema.py — Phase 1: PostgreSQL Master Schema
 4. Generates an ER diagram as PNG
 
 Usage:
-    python create_schema.py
-    python create_schema.py --diagram-only   (skip schema, just regenerate diagram)
-    python create_schema.py --verify-only    (just check tables exist)
+    python create_baseline_schema.py
+    python create_baseline_schema.py --diagram-only   (skip schema, just regenerate diagram)
+    python create_baseline_schema.py --verify-only    (just check tables exist)
 """
 
 import os
