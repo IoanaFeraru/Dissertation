@@ -52,6 +52,7 @@ to a random start date within 2025 rather than NOW() - 6 months.
 A random window is chosen per iteration to prevent plan cache bias.
 
 Usage:
+    cd benchmarks/postgres
     python q7_rolling_revenue.py                   # 1000 iterations
     python q7_rolling_revenue.py --iterations 100  # quick smoke test
     python q7_rolling_revenue.py --explain         # EXPLAIN ANALYZE
@@ -77,7 +78,7 @@ load_dotenv()
 
 WINDOW_MONTHS = 6
 WINDOW_DAYS   = 183          # ~6 months in days
-DATASET_START = date(2025, 1, 1)
+DATASET_START = date(2024, 1, 1)
 # Leave WINDOW_DAYS of headroom so window always falls within the data
 DATASET_END   = date(2025, 12, 31) - timedelta(days=WINDOW_DAYS)
 

@@ -25,6 +25,8 @@ Same applies to invoice_lines.
 Usage:
     python loaders/mongodb_naive_loader.py
     python loaders/mongodb_naive_loader.py --drop    # drop collections first
+
+    db.products.createIndex({ name: "text", description: "text" })
 """
 
 import argparse

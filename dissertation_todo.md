@@ -127,33 +127,9 @@ action, one insert — across many concurrent users. This benchmark simulates th
 
 ### MongoDB
 
-#### Naive — Load
-
-**Loader** (`loaders/mongodb_naive_loader.py`):
-- [ ] Load all 12 tables as flat collections mirroring SQL rows (no embedding, no denormalisation)
-  - [ ] `users` — one doc per user row
-  - [ ] `seller_profiles` — one doc per seller row, `user_id` as plain field
-  - [ ] `subscription_tiers` — one doc per tier
-  - [ ] `subscription_tier_pricing` — one doc per pricing row
-  - [ ] `subscriptions` — one doc per subscription row
-  - [ ] `products` — one doc per product row
-  - [ ] `invoices` — one doc per invoice row
-  - [ ] `invoice_lines` — one doc per line row, `invoice_id` as plain field (NOT embedded)
-  - [ ] `orders` — one doc per order row
-  - [ ] `order_items` — one doc per order item row
-  - [ ] `sessions` — one doc per session row, `cart` stored as JSON string
-  - [ ] `events` — one doc per event row
-- [ ] Create indexes mirroring all PostgreSQL FK indexes
-
 #### Naive — Benchmark
 
 **Benchmarks** (`benchmarks/mongodb/naive_query.py`):
-- [ ] Q1 — Monthly revenue: `$group` + `$lookup` across invoices, subscriptions, tiers, pricing
-- [ ] Q2 — Invoice fetch: two separate queries (`find_one` invoices + `find` invoice_lines by invoice_id)
-- [ ] Q3 — Session + cart: `find_one` on sessions, deserialise cart JSON string
-- [ ] Q4 — Recommendations: multi-step `$lookup` pipeline across order_items (no graph — simulate with aggregation)
-- [ ] Q5 — Product search: `$text` search on name + description (MongoDB built-in text index, no boosting)
-- [ ] Q6 — User events: `find` with `user_id` + `occurred_at` range filter
 - [ ] Q7 — Rolling revenue: `$group` by day + manual window with `$setWindowFields`
 - [ ] Q8 — Concurrent ingestion: 100 threads, one `insert_one()` per event, default write concern
 - [ ] Run 1000 iterations per query (50 warm-up) with harness
@@ -653,12 +629,12 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 
 ## Progress Tracker
 
-| Phase | Status | Date Target | Completed |
-|---|---|---|---|
-| 0 — Environment Setup | ✅ Complete | — | 2026-02-20 |
-| 1 — Schema & Data Generation | ✅ Complete | — | 2026-02-24 |
-| 2 — PostgreSQL Baselines | ✅ Complete | — | 2026-03-04 |
-| 3 — Specialised Implementations | ⬜ Not started | 2026-03-20 | — |
+| Phase | Status        | Date Target | Completed |
+|---|---------------|---|---|
+| 0 — Environment Setup | ✅ Complete    | — | 2026-02-20 |
+| 1 — Schema & Data Generation | ✅ Complete    | — | 2026-02-24 |
+| 2 — PostgreSQL Baselines | ✅ Complete    | — | 2026-03-04 |
+| 3 — Specialised Implementations | ⬜ Started     | 2026-03-20 | — |
 | 4 — Analysis & Visualisation | ⬜ Not started | 2026-04-01 | — |
 | 5 — Writing | ⬜ Not started | 2026-04-20 | — |
 | 6 — Review & Polish | ⬜ Not started | 2026-05-15 | — |
