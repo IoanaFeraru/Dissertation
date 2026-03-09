@@ -127,14 +127,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 
 ### MongoDB
 
-#### Naive — Benchmark
-
-**Benchmarks** (`benchmarks/mongodb/naive_query.py`):
-- [ ] Q7 — Rolling revenue: `$group` by day + manual window with `$setWindowFields`
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `insert_one()` per event, default write concern
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/mongodb_naive_Q{n}.json` for Q1–Q7, `results/mongodb_q8.json` for Q8
-
 #### Optimised — Load
 
 **Schema redesign:**
@@ -163,8 +155,8 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Save to `results/mongodb_optimised_Q{n}.json` for Q1–Q7
 
 #### Scalability
-- [ ] Re-run Q2 naive at 10% and 50% data scale → `results/mongodb_naive_Q2_scale10.json` / `scale50.json`
-- [ ] Re-run Q2 optimised at 10% and 50% data scale → `results/mongodb_optimised_Q2_scale10.json` / `scale50.json`
+- [ ] Re-run naive at 10% and 50% data scale → `results/mongodb_naive_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/mongodb_optimised_scale10.json` / `scale50.json`
 
 ---
 
@@ -231,8 +223,8 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Save to `results/redis_optimised_Q{n}.json` for Q1–Q7
 
 #### Scalability
-- [ ] Re-run Q3 naive at 10% and 50% data scale → `results/redis_naive_Q3_scale10.json` / `scale50.json`
-- [ ] Re-run Q3 optimised at 10% and 50% data scale → `results/redis_optimised_Q3_scale10.json` / `scale50.json`
+- [ ] Re-run naive at 10% and 50% data scale → `results/redis_naive_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/redis_optimised_scale10.json` / `scale50.json`
 
 ---
 
@@ -304,8 +296,8 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Save to `results/neo4j_optimised_Q{n}.json` for Q1–Q7
 
 #### Scalability
-- [ ] Re-run Q4 naive at 10% and 50% data scale → `results/neo4j_naive_Q4_scale10.json` / `scale50.json`
-- [ ] Re-run Q4 optimised at 10% and 50% data scale → `results/neo4j_optimised_Q4_scale10.json` / `scale50.json`
+- [ ] Re-run naive at 10% and 50% data scale → `results/neo4j_naive_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/neo4j_optimised_scale10.json` / `scale50.json`
 
 ---
 
@@ -371,8 +363,8 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Save to `results/elasticsearch_optimised_Q{n}.json` for Q1–Q7
 
 #### Scalability
-- [ ] Re-run Q5 naive at 10% and 50% data scale → `results/elasticsearch_naive_Q5_scale10.json` / `scale50.json`
-- [ ] Re-run Q5 optimised at 10% and 50% data scale → `results/elasticsearch_optimised_Q5_scale10.json` / `scale50.json`
+- [ ] Re-run naive at 10% and 50% data scale → `results/elasticsearch_naive_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/elasticsearch_optimised_scale10.json` / `scale50.json`
 
 ---
 
@@ -441,8 +433,8 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Save to `results/cassandra_optimised_Q{n}.json` for Q1–Q7
 
 #### Scalability
-- [ ] Re-run Q6 naive at 10% and 50% data scale → `results/cassandra_naive_Q6_scale10.json` / `scale50.json`
-- [ ] Re-run Q6 optimised at 10% and 50% data scale → `results/cassandra_optimised_Q6_scale10.json` / `scale50.json`
+- [ ] Re-run naive at 10% and 50% data scale → `results/cassandra_naive_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/cassandra_optimised_scale10.json` / `scale50.json`
 
 ---
 
@@ -496,8 +488,8 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Save to `results/timescaledb_optimised_Q{n}.json` for Q1–Q7
 
 #### Scalability
-- [ ] Re-run Q7 naive at 10% and 50% data scale → `results/timescaledb_naive_Q7_scale10.json` / `scale50.json`
-- [ ] Re-run Q7 optimised at 10% and 50% data scale → `results/timescaledb_optimised_Q7_scale10.json` / `scale50.json`
+- [ ] Re-run naive at 10% and 50% data scale → `results/timescaledb_naive_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/timescaledb_optimised_scale10.json` / `scale50.json`
 
 ---
 
@@ -552,8 +544,7 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 ## Phase 5 — Writing
 
 ### Methodology and Tools (write first — can be done during benchmark run time)
-- [ ] Unified schema rationale and StreamCart domain justification
-- [ ] Dataset generation logic and reproducibility (fixed seed)
+- [ ] Unified schema rationale
 - [ ] Benchmark harness design (p50/p95/p99, threading, warm-up)
 - [ ] Full-scope benchmark rationale — why all queries run on all DBs (engine effect vs schema effect)
 - [ ] PostgreSQL baseline design and query implementations
@@ -572,14 +563,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 - [ ] Statistical tests on latency distributions (Mann-Whitney U or t-test)
 
 ### Literature Review
-- [x] Why relational databases became the default
-- [ ] Why specialised databases emerged
-- [ ] How data modelling affects performance
-- [ ] How workload alignment affects performance
-- [ ] Why existing benchmarks don't isolate modelling vs engine effects
-- [ ] The research gap — lack of controlled unified-schema comparisons
-- [ ] Benchmarking methodology: YCSB, TPC-C, LinkBench — design and limitations
-- [ ] Percentile metrics (p50, p95, p99), concurrency testing, synthetic datasets
 - [ ] Minimum 25–35 academic and industry sources, APA citation style
 
 ### Introduction
@@ -594,10 +577,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 - [ ] Answer to each research question
 - [ ] Limitations and threats to validity
 - [ ] Future work suggestions
-
-### Abstract
-- [ ] Write last — one paragraph, max 300 words
-- [ ] Cover: problem, method, key findings, conclusion
 
 **✅ Phase 5 Deliverable:** Full draft completed.
 
