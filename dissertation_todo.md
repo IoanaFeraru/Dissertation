@@ -124,29 +124,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 > This keeps all related context together and produces usable results after each database.
 
 ---
-
-### MongoDB
-
-#### Optimised — Benchmark
-
-**Benchmarks** (`benchmarks/mongodb/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: `$group` pipeline on invoices with embedded tier info
-- [ ] Q2 — Invoice fetch: single `find_one` — lines embedded, no second query needed
-- [ ] Q3 — Session + cart: single `find_one` — cart is native array, no deserialisation
-- [ ] Q4 — Recommendations: `$lookup` + `$group` aggregation pipeline
-- [ ] Q5 — Product search: `$text` with weighted fields (`$meta: "textScore"` sorting)
-- [ ] Q6 — User events: compound index scan on (user_id, occurred_at)
-- [ ] Q7 — Rolling revenue: `$setWindowFields` with `$sum` window function
-- [ ] Document changes in each q_.py file
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/mongodb_optimised_Q{n}.json` for Q1–Q7
-
-#### Scalability
-- [ ] Re-run naive at 10% and 50% data scale → `results/mongodb_naive_scale10.json` / `scale50.json`
-- [ ] Re-run optimised at 10% and 50% data scale → `results/mongodb_optimised_scale10.json` / `scale50.json`
-
----
-
 ### Redis
 
 #### Naive — Load
@@ -180,6 +157,7 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Q7 — Rolling revenue: fetch all invoice IDs, GET each, aggregate + window in Python
 - [ ] Q8 — Concurrent ingestion: 100 threads, one `SET event:{id} {json}` per event, no pipelining
 - [ ] Run 1000 iterations per query (50 warm-up) with harness
+- [ ] Re-run naive at 10% and 50% data scale → `results/redis_naive_scale10.json` / `scale50.json`
 - [ ] Save to `results/redis_naive_Q{n}.json` for Q1–Q7, `results/redis_q8.json` for Q8
 
 #### Optimised — Load
@@ -208,9 +186,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 - [ ] Document changes in `benchmarks/redis/CHANGES.md`
 - [ ] Run 1000 iterations per query (50 warm-up) with harness
 - [ ] Save to `results/redis_optimised_Q{n}.json` for Q1–Q7
-
-#### Scalability
-- [ ] Re-run naive at 10% and 50% data scale → `results/redis_naive_scale10.json` / `scale50.json`
 - [ ] Re-run optimised at 10% and 50% data scale → `results/redis_optimised_scale10.json` / `scale50.json`
 
 ---
@@ -536,7 +511,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 - [ ] PostgreSQL baseline design and query implementations
 - [ ] Naive specialised schema per DB — design decisions
 - [ ] Optimised specialised schema per DB — design decisions and justifications
-- [ ] Experimental setup (hardware specs, Docker config, concurrency settings)
 - [ ] Defence of single Q8 level — why micro-batching was excluded as an application-level rather than schema-level optimisation
 
 ### Results and Discussion (write second)

@@ -17,39 +17,13 @@ Killer feature demonstrated (TimescaleDB side):
     generate_series, then compute the rolling window — all at query time
     on every execution.
 
-PostgreSQL baseline design notes
-──────────────────────────────────
-The query is built in four CTEs:
-
-  1. date_spine
-     Generates every calendar day in the 6-month window using
-     generate_series. This is the gap-filling mechanism — days with
-     no revenue will still appear in the output with 0.00 revenue,
-     matching what time_bucket_gapfill() produces natively.
-
-  2. tier_days
-     Cross-joins date_spine with subscription_tiers so every
-     (day, tier) combination exists, guaranteeing a complete grid
-     before joining revenue data. Without this, tiers with zero
-     revenue on a given day would be absent from the rolling average.
-
-  3. daily_revenue
-     Aggregates paid invoice totals by (day, tier) from raw invoices.
-     Subscription invoices are attributed by their linked subscription
-     tier. Marketplace invoices are attributed via LATERAL subquery
-     to the user's most recent subscription at invoice time —
-     consistent with the Q1 attribution logic.
-
-  4. filled
-     LEFT JOINs tier_days onto daily_revenue so every (day, tier)
-     pair has a row, with 0.00 revenue for missing days.
-
-The final SELECT computes the 7-day rolling average using a window
-function: AVG(daily_total) OVER (PARTITION BY tier, 7 PRECEDING rows).
-
-Since the dataset is fixed to 2025, the 6-month window is anchored
-to a random start date within 2025 rather than NOW() - 6 months.
-A random window is chosen per iteration to prevent plan cache bias.
+Window anchoring
+────────────────
+The 6-month window start is chosen at random within the actual min/max
+of paid invoice created_at, queried once at startup. This replaces the
+previous hardcoded DATASET_START/DATASET_END constants (date(2024,1,1)
+and date(2025,12,31)), which could generate windows that miss the data
+entirely if the dataset date range shifts.
 
 Usage:
     cd benchmarks/postgres
@@ -74,49 +48,33 @@ from benchmarks.harness import run_benchmark
 
 load_dotenv()
 
-# -- dataset date range -------------------------------------------------------
+# -- window constants ---------------------------------------------------------
 
 WINDOW_MONTHS = 6
 WINDOW_DAYS   = 183          # ~6 months in days
-DATASET_START = date(2024, 1, 1)
-# Leave WINDOW_DAYS of headroom so window always falls within the data
-DATASET_END   = date(2025, 12, 31) - timedelta(days=WINDOW_DAYS)
 
 # -- connection ---------------------------------------------------------------
 
 from pg_conn import get_connection
 
+# -- data range loader --------------------------------------------------------
+
+def load_data_date_range(conn):
+    """
+    Query the actual min/max of paid invoice created_at so the random
+    window is always anchored within real data — no hardcoded dates.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT MIN(created_at)::date, MAX(created_at)::date
+            FROM invoices WHERE status = 'paid';
+        """)
+        row = cur.fetchone()
+    if not row or not row[0]:
+        raise RuntimeError("No paid invoices found — run the data loader first.")
+    return row[0], row[1]
+
 # -- query --------------------------------------------------------------------
-#
-# CTE breakdown
-# -------------
-#
-#   1. date_spine
-#      generate_series produces one row per calendar day in the window.
-#      This is the PostgreSQL equivalent of TimescaleDB's time_bucket_gapfill()
-#      gap-filling — every day exists regardless of whether revenue occurred.
-#
-#   2. tier_days
-#      CROSS JOIN with subscription_tiers (3 rows) expands the spine to
-#      one row per (day, tier) — 3 * WINDOW_DAYS rows total (~549 rows).
-#      This ensures tiers with zero activity on a given day still appear
-#      in the final output with 0.00, matching time_bucket_gapfill() output.
-#
-#   3. daily_revenue
-#      Aggregates actual invoice totals per (day, tier).
-#      Attribution logic mirrors Q1:
-#        - subscription invoices: tier from subscription record
-#        - marketplace invoices:  tier from LATERAL most-recent-subscription
-#
-#   4. filled
-#      LEFT JOIN tier_days -> daily_revenue so every (day, tier) pair
-#      has a row. COALESCE converts NULL revenue (missing days) to 0.00.
-#
-#   Final SELECT:
-#      AVG() OVER with ROWS BETWEEN 6 PRECEDING AND CURRENT ROW computes
-#      the 7-day rolling average within each tier partition, ordered by day.
-#      TimescaleDB's equivalent is a window function over the continuous
-#      aggregate — structurally identical but reading pre-computed buckets.
 
 Q7_SQL = """
 WITH date_spine AS (
@@ -131,7 +89,6 @@ WITH date_spine AS (
 
 tier_days AS (
 
-    -- Every (day, tier) combination — guarantees complete grid for gap-fill
     SELECT
         ds.day,
         st.id   AS tier_id,
@@ -143,7 +100,6 @@ tier_days AS (
 
 daily_revenue AS (
 
-    -- Subscription invoice revenue per day and tier
     SELECT
         DATE_TRUNC('day', i.created_at)::date AS day,
         sub.tier_id,
@@ -158,7 +114,6 @@ daily_revenue AS (
 
     UNION ALL
 
-    -- Marketplace invoice revenue attributed to user's active tier at purchase
     SELECT
         DATE_TRUNC('day', i.created_at)::date AS day,
         active_sub.tier_id,
@@ -182,7 +137,6 @@ daily_revenue AS (
 
 filled AS (
 
-    -- Gap-fill: LEFT JOIN ensures every (day, tier) row exists
     SELECT
         td.day,
         td.tier_id,
@@ -216,15 +170,15 @@ Q7_EXPLAIN_SQL = "EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)\n" + Q7_SQL
 
 # -- helpers ------------------------------------------------------------------
 
-def random_window():
+def random_window(data_min: date, data_max: date):
     """
     Return a (window_start, window_end) pair anchored to a random date
-    within the 2025 dataset. The window is always WINDOW_DAYS long and
-    always falls within the dataset boundaries.
+    within the actual invoice date range. The window is always WINDOW_DAYS
+    long and always falls within the data boundaries.
     """
-    delta = (DATASET_END - DATASET_START).days
-    start = DATASET_START + timedelta(days=random.randint(0, delta))
-    end   = start + timedelta(days=WINDOW_DAYS - 1)
+    max_start = max(0, (data_max - data_min).days - WINDOW_DAYS)
+    start     = data_min + timedelta(days=random.randint(0, max_start))
+    end       = start + timedelta(days=WINDOW_DAYS - 1)
     return start, end
 
 def query_params(start: date, end: date) -> tuple:
@@ -236,15 +190,9 @@ def query_params(start: date, end: date) -> tuple:
 
 # -- benchmark factory --------------------------------------------------------
 
-def make_query_fn(conn):
-    """
-    Return a zero-argument callable that executes Q7 over a randomly
-    chosen 6-month window on every call. Randomising the window prevents
-    the PostgreSQL plan cache from reusing identical parameter plans and
-    prevents the OS page cache from serving the same invoice pages repeatedly.
-    """
+def make_query_fn(conn, data_min: date, data_max: date):
     def _run():
-        start, end = random_window()
+        start, end = random_window(data_min, data_max)
         with conn.cursor() as cur:
             cur.execute(Q7_SQL, query_params(start, end))
             cur.fetchall()
@@ -252,9 +200,8 @@ def make_query_fn(conn):
 
 # -- helper modes -------------------------------------------------------------
 
-def dry_run(conn):
-    """Execute Q7 for one window and print the first and last rows."""
-    start, end = random_window()
+def dry_run(conn, data_min: date, data_max: date):
+    start, end = random_window(data_min, data_max)
     print(f"\n  DRY RUN -- Q7 rolling revenue")
     print(f"  Window: {start} to {end} ({WINDOW_DAYS} days)\n")
 
@@ -277,10 +224,9 @@ def dry_run(conn):
     print(header_line)
     print(sep_line)
 
-    # Print first 9 rows (3 days x 3 tiers) and last 9 rows
     sample = rows[:9]
     if total_rows > 18:
-        sample += [None]   # sentinel for ellipsis
+        sample += [None]
         sample += rows[-9:]
 
     for row in sample:
@@ -292,9 +238,8 @@ def dry_run(conn):
         ))
 
 
-def explain(conn):
-    """Print EXPLAIN ANALYZE for one Q7 execution."""
-    start, end = random_window()
+def explain(conn, data_min: date, data_max: date):
+    start, end = random_window(data_min, data_max)
     print(f"\n  EXPLAIN ANALYZE -- Q7 ({start} to {end}):\n")
     with conn.cursor() as cur:
         cur.execute(Q7_EXPLAIN_SQL, query_params(start, end))
@@ -331,21 +276,24 @@ def main():
     print("  PostgreSQL -- Q7 Rolling Revenue Benchmark")
     print("=" * 50)
     print(f"  Window size  : {WINDOW_DAYS} days (~{WINDOW_MONTHS} months)")
-    print(f"  Dataset range: {DATASET_START} to {DATASET_END + timedelta(days=WINDOW_DAYS)}")
 
     conn = get_connection()
 
     try:
+        data_min, data_max = load_data_date_range(conn)
+        print(f"  Invoice range: {data_min} → {data_max}")
+        print(f"  Window start : random within [{data_min}, {data_max - timedelta(days=WINDOW_DAYS)}]")
+
         if args.explain:
-            explain(conn)
+            explain(conn, data_min, data_max)
             return
 
         if args.dry_run:
-            dry_run(conn)
+            dry_run(conn, data_min, data_max)
             return
 
         run_benchmark(
-            query_fn=make_query_fn(conn),
+            query_fn=make_query_fn(conn, data_min, data_max),
             db="postgres",
             query_id="Q7",
             label=(
@@ -353,8 +301,8 @@ def main():
                 f"over a {WINDOW_DAYS}-day (~{WINDOW_MONTHS}-month) window with "
                 "generate_series gap-filling. Subscription + marketplace revenue "
                 "both included with temporal tier attribution (mirrors Q1 logic). "
-                "Random window start per iteration to avoid plan/page cache bias. "
-                "TimescaleDB baseline uses time_bucket_gapfill() on continuous aggregate."
+                "Random window within actual invoice date range per iteration — "
+                "no hardcoded dataset bounds."
             ),
             iterations=args.iterations,
             concurrency=1,

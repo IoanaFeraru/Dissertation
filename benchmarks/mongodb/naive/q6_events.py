@@ -57,95 +57,97 @@ WINDOW_DAYS   = 30
 DATASET_START = date(2025, 1, 1)
 DATASET_END   = date(2025, 12, 31) - timedelta(days=WINDOW_DAYS)
 
+def load_data_date_range(db) -> tuple[datetime, datetime]:
+    result = db["events"].aggregate([
+        {"$group": {
+            "_id":      None,
+            "min_date": {"$min": "$occurred_at"},
+            "max_date": {"$max": "$occurred_at"},
+        }}
+    ])
+    row = next(result, None)
+    if not row:
+        raise RuntimeError("No events found — run the naive loader first.")
+    parse = lambda s: datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
+    return parse(row["min_date"]), parse(row["max_date"])
+
 # ── date helpers ──────────────────────────────────────────────────────────────
 
-def random_window() -> tuple[str, str]:
-    """
-    Return an (iso_start, iso_end) string pair for a random 30-day window
-    within the 2025 dataset range.
-    String format matches the ISO 8601 format stored in the naive collection.
-    """
-    delta = (DATASET_END - DATASET_START).days
-    start = DATASET_START + timedelta(days=random.randint(0, delta))
-    end   = start + timedelta(days=WINDOW_DAYS)
-    # Match the format stored in events.csv: "2025-03-19T19:13:00+00:00"
-    start_str = datetime(start.year, start.month, start.day,
-                         tzinfo=timezone.utc).isoformat()
-    end_str   = datetime(end.year, end.month, end.day,
-                         tzinfo=timezone.utc).isoformat()
-    return start_str, end_str
-
+def random_window(data_min: datetime, data_max: datetime) -> tuple[str, str]:
+    data_span  = int((data_max - data_min).total_seconds())
+    max_offset = max(0, data_span - WINDOW_DAYS * 86400)
+    offset_sec = random.randint(0, max_offset)
+    start      = data_min + timedelta(seconds=offset_sec)
+    end        = start + timedelta(days=WINDOW_DAYS)
+    return start.isoformat(), end.isoformat()
 # ── ID pool ───────────────────────────────────────────────────────────────────
 
-def fetch_user_id_pool(db, pool_size: int) -> list[str]:
+def fetch_user_anchor_pool(db, pool_size: int) -> list[tuple[str, str]]:
     """
-    Pre-fetch user IDs that have at least one event in the collection.
-    Only users with events are sampled — timing empty scans would not
-    represent the realistic hot path.
+    Sample (user_id, occurred_at) pairs directly from the events collection.
+    The window start is set to occurred_at - 15 days, so the anchor event
+    always falls in the middle of the window — guaranteed non-empty result.
     """
     pipeline = [
-        {"$group": {"_id": "$user_id"}},
         {"$sample": {"size": pool_size}},
+        {"$project": {"_id": 0, "user_id": 1, "occurred_at": 1}},
     ]
-    ids = [doc["_id"] for doc in db["events"].aggregate(pipeline)]
-    if not ids:
+    pairs = [(d["user_id"], d["occurred_at"])
+             for d in db["events"].aggregate(pipeline)]
+    if not pairs:
         raise RuntimeError(
             "No events found in MongoDB. "
             "Run the naive loader before benchmarking."
         )
-    print(f"  Loaded pool of {len(ids)} user IDs with event history.")
-    return ids
+    print(f"  Loaded pool of {len(pairs)} (user_id, anchor) pairs from events.")
+    return pairs
+
+def anchor_window(anchor_iso: str) -> tuple[str, str]:
+    """
+    Build a 30-day window centred on the anchor event.
+    anchor is placed ~15 days in, guaranteeing it falls inside the window.
+    """
+    anchor = datetime.fromisoformat(anchor_iso.strip().replace("Z", "+00:00"))
+    start  = anchor - timedelta(days=15)
+    end    = start + timedelta(days=WINDOW_DAYS)
+    return start.isoformat(), end.isoformat()
 
 # ── core Q6 logic ─────────────────────────────────────────────────────────────
 
 def run_q6(db, user_id: str, window_start: str, window_end: str) -> list[dict]:
-    """
-    Fetch all events for a user within a 30-day window.
-    String-range comparison on occurred_at — naive constraint.
-    Uses the composite index (user_id, occurred_at DESC).
-    """
     return list(db["events"].find(
         {
             "user_id":    user_id,
-            "occurred_at": {
-                "$gte": window_start,
-                "$lt":  window_end,
-            },
+            "occurred_at": {"$gte": window_start, "$lt": window_end},
         },
         {
-            "_id":        1,
-            "event_type": 1,
-            "occurred_at":1,
-            "product_id": 1,
-            "session_id": 1,
-            "metadata":   1,
+            "_id": 1, "event_type": 1, "occurred_at": 1,
+            "product_id": 1, "session_id": 1, "metadata": 1,
         }
     ).sort("occurred_at", -1))
 
 # ── benchmark factory ─────────────────────────────────────────────────────────
 
-def make_query_fn(db, user_ids: list[str]):
+def make_query_fn(db, pairs: list[tuple[str, str]]):
     def _run():
-        user_id = random.choice(user_ids)
-        start, end = random_window()
+        user_id, anchor = random.choice(pairs)
+        start, end = anchor_window(anchor)
         run_q6(db, user_id, start, end)
     return _run
 
 # ── dry run ───────────────────────────────────────────────────────────────────
 
-def dry_run(db, user_ids: list[str]):
-    user_id = user_ids[0]
-    start, end = random_window()
+def dry_run(db, pairs: list[tuple[str, str]]):
+    user_id, anchor = pairs[0]
+    start, end = anchor_window(anchor)
     print(f"\n  DRY RUN — MongoDB Naive Q6 events for user {user_id}")
     print(f"  Window: {start} to {end}\n")
     rows = run_q6(db, user_id, start, end)
     if not rows:
-        print("  No events found in this window — try --dry-run again for a different window.")
+        print("  ⚠  Still no events — check the loader ran correctly.")
         return
     print(f"  {len(rows)} event(s) returned:\n")
-    print(
-        f"  {'#':<4} {'Event type':<25} {'Occurred at':<32} {'Product ID':<38}"
-    )
+    print(f"  {'#':<4} {'Event type':<25} {'Occurred at':<32} {'Product ID':<38}")
     print(f"  {'─'*4} {'─'*25} {'─'*32} {'─'*38}")
     for i, row in enumerate(rows[:20], 1):
         print(
@@ -189,22 +191,22 @@ def main():
           f"{DATASET_END + timedelta(days=WINDOW_DAYS)}")
 
     db = get_db()
-    user_ids = fetch_user_id_pool(db, args.pool_size)
+    pairs = fetch_user_anchor_pool(db, args.pool_size)
 
     if args.dry_run:
-        dry_run(db, user_ids)
+        dry_run(db, pairs)
         return
 
     run_benchmark(
-        query_fn=make_query_fn(db, user_ids),
+        query_fn=make_query_fn(db, pairs),
         db="mongodb_naive",
         query_id="Q6",
         label=(
             f"All events for a user in a {WINDOW_DAYS}-day window, ordered "
             "by occurred_at DESC. Naive: ISO 8601 string range comparison "
             "on composite index (user_id, occurred_at DESC). "
-            "Random (user_id, window_start) pair per iteration. "
-            f"Pool of {args.pool_size} user IDs. Dataset fixed to 2025."
+            "Window anchored on a sampled real event — guaranteed non-empty. "
+            f"Pool of {args.pool_size} (user_id, anchor) pairs."
         ),
         iterations=args.iterations,
         concurrency=1,

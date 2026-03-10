@@ -30,7 +30,7 @@ Usage:
     python run_scalability.py --scale 10         # 10% scale only
     python run_scalability.py --scale 50         # 50% scale only
     python run_scalability.py --iterations 100   # smoke test
-    python run_scalability.py --only Q1 Q6       # specific queries only
+    python run_scalability.py --only Q6       # specific queries only
     python run_scalability.py --dry-run          # 100 iterations, both scales
 """
 
@@ -72,19 +72,6 @@ from pg_conn import get_connection
 # ── cutoff computation ────────────────────────────────────────────────────────
 
 def compute_cutoffs(conn) -> dict:
-    """
-    Compute the 10% and 50% date cutoffs from the actual occurred_at
-    range in the events table.
-
-    Returns a dict:
-        {
-          "min_date":      date,   # earliest event date
-          "max_date":      date,   # latest event date
-          "range_days":    int,    # total span in days
-          "cutoff_10pct":  date,   # min_date + 10% of range
-          "cutoff_50pct":  date,   # min_date + 50% of range
-        }
-    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -112,18 +99,7 @@ def compute_cutoffs(conn) -> dict:
         "cutoff_50pct": cutoff_50,
     }
 
-# ── scaled query definitions ──────────────────────────────────────────────────
-#
-# Each query has a scaled variant that adds a date range filter.
-# The full-scale queries (run_all.py) have no date filter — the dataset
-# is queried in full. The scaled variants restrict by cutoff date.
-#
-# For Q1, Q3, Q6, Q7: filter on occurred_at / invoice created_at
-# For Q2: filter invoices by created_at
-# For Q4: filter orders by created_at (drives co-purchase graph size)
-# For Q5: filter products by created_at (drives corpus size)
-
-# ── Q1 scaled ────────────────────────────────────────────────────────────────
+# ── scaled SQL ────────────────────────────────────────────────────────────────
 
 Q1_SCALED_SQL = """
 WITH invoice_tiers AS (
@@ -134,7 +110,7 @@ WITH invoice_tiers AS (
     WHERE i.invoice_type = 'subscription'
       AND i.status       = 'paid'
       AND i.created_at  >= NOW() - INTERVAL '12 months'
-      AND i.created_at  <  %s::timestamptz    -- scale cutoff
+      AND i.created_at  <  %s::timestamptz
 
     UNION ALL
 
@@ -149,7 +125,7 @@ WITH invoice_tiers AS (
     WHERE i.invoice_type = 'marketplace'
       AND i.status       = 'paid'
       AND i.created_at  >= NOW() - INTERVAL '12 months'
-      AND i.created_at  <  %s::timestamptz    -- scale cutoff
+      AND i.created_at  <  %s::timestamptz
 ),
 monthly_revenue AS (
     SELECT
@@ -172,8 +148,6 @@ SELECT TO_CHAR(month, 'YYYY-MM') AS month, tier_name,
 FROM monthly_revenue ORDER BY month, tier_name;
 """
 
-# ── Q2 scaled ────────────────────────────────────────────────────────────────
-
 Q2_SCALED_SQL = """
 SELECT
     i.id, i.invoice_type, i.status, i.subtotal_usd, i.tax_usd,
@@ -188,23 +162,19 @@ JOIN users         u  ON u.id  = i.user_id
 JOIN invoice_lines il ON il.invoice_id = i.id
 LEFT JOIN products p  ON p.id  = il.product_id
 WHERE i.id = %s
-  AND i.created_at < %s::timestamptz    -- scale cutoff
+  AND i.created_at < %s::timestamptz
 ORDER BY il.created_at;
 """
-
-# ── Q3 scaled ────────────────────────────────────────────────────────────────
 
 Q3_SCALED_SQL = """
 SELECT s.id, s.user_id, s.cart, s.ip_address,
        s.user_agent, s.created_at, s.last_active_at, s.expires_at
 FROM sessions s
 WHERE s.user_id = %s
-  AND s.created_at < %s::timestamptz    -- scale cutoff
+  AND s.created_at < %s::timestamptz
 ORDER BY s.last_active_at DESC
 LIMIT 1;
 """
-
-# ── Q4 scaled ────────────────────────────────────────────────────────────────
 
 Q4_SCALED_SQL = """
 WITH orders_with_product AS (
@@ -213,7 +183,7 @@ WITH orders_with_product AS (
     JOIN   orders o ON o.id = oi.order_id
     WHERE  oi.product_id = %s
       AND  o.status IN ('confirmed', 'shipped', 'delivered')
-      AND  o.created_at < %s::timestamptz    -- scale cutoff
+      AND  o.created_at < %s::timestamptz
 ),
 co_purchased AS (
     SELECT oi.product_id, COUNT(DISTINCT oi.order_id) AS co_purchase_count
@@ -233,8 +203,6 @@ ORDER BY cp.co_purchase_count DESC, p.name
 LIMIT 10;
 """
 
-# ── Q5 scaled ────────────────────────────────────────────────────────────────
-
 Q5_SCALED_SQL = """
 SELECT p.id, p.name, p.product_type, p.price_usd, p.attributes,
        ts_rank_cd(p.search_vector, query) AS rank
@@ -242,12 +210,10 @@ FROM   products p,
        plainto_tsquery('english', %s) AS query
 WHERE  p.search_vector @@ query
   AND  p.is_active = TRUE
-  AND  p.created_at < %s::timestamptz    -- scale cutoff
+  AND  p.created_at < %s::timestamptz
 ORDER BY rank DESC
 LIMIT 20;
 """
-
-# ── Q6 scaled ────────────────────────────────────────────────────────────────
 
 Q6_SCALED_SQL = """
 SELECT e.id, e.event_type, e.occurred_at,
@@ -255,11 +221,9 @@ SELECT e.id, e.event_type, e.occurred_at,
 FROM events e
 WHERE e.user_id     = %s
   AND e.occurred_at >= %s
-  AND e.occurred_at <  %s    -- window end = MIN(window_start+30d, cutoff)
+  AND e.occurred_at <  %s
 ORDER BY e.occurred_at DESC;
 """
-
-# ── Q7 scaled ────────────────────────────────────────────────────────────────
 
 Q7_SCALED_SQL = """
 WITH date_spine AS (
@@ -277,7 +241,7 @@ daily_revenue AS (
     WHERE i.invoice_type = 'subscription' AND i.status = 'paid'
       AND i.created_at >= %s::date
       AND i.created_at <  (%s::date + INTERVAL '1 day')
-      AND i.created_at <  %s::timestamptz    -- scale cutoff
+      AND i.created_at <  %s::timestamptz
     GROUP BY 1, 2
 
     UNION ALL
@@ -293,7 +257,7 @@ daily_revenue AS (
     WHERE i.invoice_type = 'marketplace' AND i.status = 'paid'
       AND i.created_at >= %s::date
       AND i.created_at <  (%s::date + INTERVAL '1 day')
-      AND i.created_at <  %s::timestamptz    -- scale cutoff
+      AND i.created_at <  %s::timestamptz
     GROUP BY 1, 2
 ),
 filled AS (
@@ -315,6 +279,20 @@ FROM filled ORDER BY day, tier_name;
 
 # ── ID pool helpers ───────────────────────────────────────────────────────────
 
+import random
+from datetime import date, timedelta
+
+WINDOW_DAYS_Q7 = 183
+
+SEARCH_TERMS = [
+    "brushes", "typography", "illustration", "photography", "animation",
+    "branding", "mockup", "watercolour", "photoshop brushes", "video editing",
+    "certificate course", "logo design", "colour palette", "font pack",
+    "texture pack", "motion graphics", "social media", "icon set",
+    "web design", "canva template", "vector illustration", "beginner design",
+    "digital course", "design assets", "procreate brushes",
+]
+
 def fetch_invoice_id_pool(conn, cutoff, pool_size=1000):
     with conn.cursor() as cur:
         cur.execute("""
@@ -329,16 +307,10 @@ def fetch_invoice_id_pool(conn, cutoff, pool_size=1000):
 
 def fetch_user_id_pool_sessions(conn, scale_pct, pool_size=1000):
     """
-    Q3 uses row-based scaling rather than date-range scaling.
-    Sessions were all generated in 2025 so a date cutoff returns zero rows.
-    Instead we sample a fraction of the total sessions table:
-      10% scale -> pool drawn from 10% of all distinct session user_ids
-      50% scale -> pool drawn from 50% of all distinct session user_ids
-    This measures whether lookup latency changes as the concurrent user
-    pool size shrinks, which is the meaningful scalability question for Q3.
+    Q3 uses row-based scaling — sessions all generated in 2025 so a date
+    cutoff returns zero rows. Sample a fraction of distinct session users.
     """
     with conn.cursor() as cur:
-        # Total distinct users with sessions
         cur.execute("SELECT COUNT(DISTINCT user_id) FROM sessions;")
         total = cur.fetchone()[0]
         limit = max(1, int(total * scale_pct / 100))
@@ -350,8 +322,6 @@ def fetch_user_id_pool_sessions(conn, scale_pct, pool_size=1000):
         rows = cur.fetchall()
     if not rows:
         raise RuntimeError("No sessions found in the sessions table")
-    # Return up to pool_size random IDs drawn from the scaled subset
-    import random
     ids = [str(r[0]) for r in rows]
     return random.choices(ids, k=min(pool_size, len(ids)))
 
@@ -371,35 +341,30 @@ def fetch_product_id_pool(conn, cutoff, pool_size=1000):
         raise RuntimeError(f"No products in orders before {cutoff}")
     return [str(r[0]) for r in rows]
 
-def fetch_user_id_pool_events(conn, cutoff, pool_size=1000):
+def fetch_anchor_pool_events(conn, cutoff, pool_size=1000):
+    """
+    Sample (user_id, occurred_at) pairs from events before the cutoff.
+    Window is centred on the anchor — guaranteed non-empty each iteration.
+    Mirrors the fix applied to the standalone q6_events.py.
+
+    Uses ORDER BY RANDOM() rather than TABLESAMPLE — TABLESAMPLE samples
+    random heap pages across the whole table, so at small cutoffs (e.g.
+    10% scale = 72 days in) almost no pages land in the date slice.
+    """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT user_id FROM (
-                SELECT DISTINCT user_id FROM events WHERE occurred_at < %s
-            ) AS s ORDER BY RANDOM() LIMIT %s;
+            SELECT user_id, occurred_at
+            FROM events
+            WHERE occurred_at < %s
+            ORDER BY RANDOM()
+            LIMIT %s;
         """, (cutoff, pool_size))
         rows = cur.fetchall()
     if not rows:
         raise RuntimeError(f"No events before {cutoff}")
-    return [str(r[0]) for r in rows]
+    return [(str(r[0]), r[1]) for r in rows]
 
 # ── query function factories ──────────────────────────────────────────────────
-
-import random
-from datetime import date, timedelta
-
-DATASET_START  = date(2025, 1, 1)
-WINDOW_DAYS_Q6 = 30
-WINDOW_DAYS_Q7 = 183
-
-SEARCH_TERMS = [
-    "brushes", "typography", "illustration", "photography", "animation",
-    "branding", "mockup", "watercolour", "photoshop brushes", "video editing",
-    "certificate course", "logo design", "colour palette", "font pack",
-    "texture pack", "motion graphics", "social media", "icon set",
-    "web design", "canva template", "vector illustration", "beginner design",
-    "digital course", "design assets", "procreate brushes",
-]
 
 def make_q1_fn(conn, cutoff):
     def _run():
@@ -416,26 +381,9 @@ def make_q2_fn(conn, invoice_ids, cutoff):
             cur.fetchall()
     return _run
 
-def make_q3_fn(conn, user_ids, cutoff):
-    import threading
-    local = threading.local()
-    def _get_conn():
-        if not getattr(local, "conn", None) or local.conn.closed:
-            local.conn = get_connection()
-        return local.conn
-    def _run():
-        c = _get_conn()
-        uid = random.choice(user_ids)
-        with c.cursor() as cur:
-            cur.execute(Q3_SCALED_SQL, (uid, cutoff))
-            cur.fetchone()
-    return _run
-
 def make_q3_fn_no_cutoff(conn, user_ids):
     """
-    Q3 scalability variant — no date cutoff, pool size controls scale.
-    Uses the same query as the full-scale baseline (no created_at filter)
-    but draws user IDs from a scaled-down pool.
+    Q3 scalability variant — pool size controls scale, no date cutoff.
     """
     import threading
     local = threading.local()
@@ -474,25 +422,35 @@ def make_q5_fn(conn, cutoff):
             cur.fetchall()
     return _run
 
-def make_q6_fn(conn, user_ids, cutoff):
-    cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
-    delta       = (cutoff_date - DATASET_START).days
+def make_q6_fn(conn, pairs):
+    """
+    Window centred on a sampled real event — guaranteed non-empty.
+    Mirrors q6_events.py anchor-based methodology.
+    """
     def _run():
-        uid          = random.choice(user_ids)
-        max_start    = max(0, delta - WINDOW_DAYS_Q6)
-        start        = DATASET_START + timedelta(days=random.randint(0, max_start))
-        end          = min(start + timedelta(days=WINDOW_DAYS_Q6), cutoff_date)
+        user_id, anchor_dt = random.choice(pairs)
+        start = anchor_dt - timedelta(days=15)
+        end   = anchor_dt + timedelta(days=15)
         with conn.cursor() as cur:
-            cur.execute(Q6_SCALED_SQL, (uid, start, end))
+            cur.execute(Q6_SCALED_SQL, (user_id, start, end))
             cur.fetchall()
     return _run
 
 def make_q7_fn(conn, cutoff):
     cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
-    delta       = (cutoff_date - DATASET_START).days
+    min_date    = cutoff_date - timedelta(days=cutoff_date.toordinal() - date.min.toordinal())
+
+    # Recompute data_min from DB once at factory time
+    with conn.cursor() as cur:
+        cur.execute("SELECT MIN(occurred_at)::date FROM events WHERE occurred_at < %s;",
+                    (cutoff,))
+        row = cur.fetchone()
+    data_min = row[0] if row and row[0] else date(2024, 1, 1)
+
     def _run():
+        delta     = (cutoff_date - data_min).days
         max_start = max(0, delta - WINDOW_DAYS_Q7)
-        start     = DATASET_START + timedelta(days=random.randint(0, max_start))
+        start     = data_min + timedelta(days=random.randint(0, max_start))
         end       = min(start + timedelta(days=WINDOW_DAYS_Q7 - 1), cutoff_date)
         params    = (start, end, start, end, cutoff, start, end, cutoff)
         with conn.cursor() as cur:
@@ -510,47 +468,52 @@ def run_scaled_query(
     iterations: int,
     results_dir: str,
 ) -> dict | None:
-    """Run one scaled query and save the result. Returns the result dict."""
     suffix      = f"scale{scale_pct}"
     output_path = os.path.join(results_dir, f"postgres_{query_id.lower()}_{suffix}.json")
-    if query_id == "Q3":
+
+    if query_id == "Q6":
+        label = (
+            f"Q6 at {scale_pct}% scale — events cutoff: {cutoff}. "
+            "Window centred on a sampled real event — guaranteed non-empty. "
+            "Mirrors standalone q6_events.py anchor-based methodology."
+        )
+    elif query_id == "Q3":
         label = (
             f"Q3 at {scale_pct}% scale — row-based scaling: user pool drawn from "
             f"{scale_pct}% of total session users. No date cutoff applied. "
-            f"Sessions were generated in 2025 making date-range scaling inapplicable."
+            "Sessions were generated in 2025 making date-range scaling inapplicable."
         )
     else:
         label = (
             f"{query_id} at {scale_pct}% scale — date range cutoff: {cutoff}. "
-            f"Same query as full-scale baseline with additional created_at/occurred_at filter."
+            "Same query as full-scale baseline with additional created_at/occurred_at filter."
         )
 
     try:
         if query_id == "Q1":
-            query_fn = make_q1_fn(conn, cutoff)
+            query_fn    = make_q1_fn(conn, cutoff)
             concurrency = 1
         elif query_id == "Q2":
-            pool     = fetch_invoice_id_pool(conn, cutoff)
-            query_fn = make_q2_fn(conn, pool, cutoff)
+            pool        = fetch_invoice_id_pool(conn, cutoff)
+            query_fn    = make_q2_fn(conn, pool, cutoff)
             concurrency = 1
         elif query_id == "Q3":
-            # Q3 uses row-based scaling (see fetch_user_id_pool_sessions)
-            pool     = fetch_user_id_pool_sessions(conn, scale_pct)
-            query_fn = make_q3_fn_no_cutoff(conn, pool)
+            pool        = fetch_user_id_pool_sessions(conn, scale_pct)
+            query_fn    = make_q3_fn_no_cutoff(conn, pool)
             concurrency = 50
         elif query_id == "Q4":
-            pool     = fetch_product_id_pool(conn, cutoff)
-            query_fn = make_q4_fn(conn, pool, cutoff)
+            pool        = fetch_product_id_pool(conn, cutoff)
+            query_fn    = make_q4_fn(conn, pool, cutoff)
             concurrency = 1
         elif query_id == "Q5":
-            query_fn = make_q5_fn(conn, cutoff)
+            query_fn    = make_q5_fn(conn, cutoff)
             concurrency = 1
         elif query_id == "Q6":
-            pool     = fetch_user_id_pool_events(conn, cutoff)
-            query_fn = make_q6_fn(conn, pool, cutoff)
+            pool        = fetch_anchor_pool_events(conn, cutoff)
+            query_fn    = make_q6_fn(conn, pool)
             concurrency = 1
         elif query_id == "Q7":
-            query_fn = make_q7_fn(conn, cutoff)
+            query_fn    = make_q7_fn(conn, cutoff)
             concurrency = 1
         else:
             warn(f"Unknown query {query_id}, skipping.")
@@ -618,7 +581,6 @@ def main():
 
     conn = get_connection()
 
-    # ── compute cutoffs ───────────────────────────────────────────────────────
     info("Computing date range cutoffs from events table...")
     cutoffs = compute_cutoffs(conn)
     print(f"  Dataset range : {cutoffs['min_date']} → {cutoffs['max_date']} "
@@ -626,7 +588,6 @@ def main():
     print(f"  10% cutoff    : {cutoffs['cutoff_10pct']}")
     print(f"  50% cutoff    : {cutoffs['cutoff_50pct']}")
 
-    # ── run benchmarks ────────────────────────────────────────────────────────
     all_results = []
     failed      = []
     total_start = time.perf_counter()
@@ -650,7 +611,7 @@ def main():
                 results_dir=args.results_dir,
             )
             if result:
-                result["scale_pct"] = scale
+                result["scale_pct"]   = scale
                 result["cutoff_date"] = str(cutoff)
                 all_results.append(result)
             else:
@@ -658,7 +619,6 @@ def main():
 
     conn.close()
 
-    # ── summary ───────────────────────────────────────────────────────────────
     total_elapsed = time.perf_counter() - total_start
 
     print(f"\n{'═'*60}")
@@ -675,7 +635,6 @@ def main():
             f"{lms.get('p99', 0):>9.2f}ms"
         )
 
-    # Save combined summary
     summary_path = os.path.join(args.results_dir, "postgres_scalability_summary.json")
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
