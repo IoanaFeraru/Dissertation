@@ -83,15 +83,15 @@ the methodology chapter.
 > Q1–Q7 are each one database's "killer" query — the workload it was specifically designed for.
 > ALL queries are run on ALL databases — see Key Design Decisions above.
 
-| # | Killer DB | Query | What it uniquely demonstrates |
-|---|---|---|---|
-| Q1 | PostgreSQL | Monthly revenue report by subscription tier incl. marketplace purchases, last 12 months — temporal JOIN on pricing history | Multi-table temporal JOIN — relational elegance |
-| Q2 | MongoDB | Fetch a complete invoice with customer info, all line items and product details in a single read | Embedded document model — zero JOINs |
-| Q3 | Redis | Retrieve a user's active session and full cart contents under 50 concurrent requests | Single-key lookup under concurrency |
-| Q4 | Neo4j | Given a product, find the top 10 recommendations based on co-purchase traversal | Graph traversal — structurally impossible to replicate efficiently in SQL |
+| # | Killer DB     | Query | What it uniquely demonstrates |
+|---|---------------|---|---|
+| Q1 | PostgreSQL    | Monthly revenue report by subscription tier incl. marketplace purchases, last 12 months — temporal JOIN on pricing history | Multi-table temporal JOIN — relational elegance |
+| Q2 | MongoDB       | Fetch a complete invoice with customer info, all line items and product details in a single read | Embedded document model — zero JOINs |
+| Q3 |               | Retrieve a user's active session and full cart contents under 50 concurrent requests | Single-key lookup under concurrency |
+| Q4 | Neo4j         | Given a product, find the top 10 recommendations based on co-purchase traversal | Graph traversal — structurally impossible to replicate efficiently in SQL |
 | Q5 | Elasticsearch | Full-text product search with relevance ranking across name, description and attributes | BM25 ranking + custom analysers — PostgreSQL tsvector is the baseline |
-| Q6 | Cassandra | Retrieve all activity events for a specific user in a 30-day window, ordered by time | Wide-row partition scan at 5M+ rows |
-| Q7 | TimescaleDB | 7-day rolling average of daily revenue per subscription tier over 6 months, with gap-filling for days with zero activity | `time_bucket_gapfill()` — structurally impossible in plain PostgreSQL |
+| Q6 | Cassandra     | Retrieve all activity events for a specific user in a 30-day window, ordered by time | Wide-row partition scan at 5M+ rows |
+| Q7 | TimescaleDB   | 7-day rolling average of daily revenue per subscription tier over 6 months, with gap-filling for days with zero activity | `time_bucket_gapfill()` — structurally impossible in plain PostgreSQL |
 
 ### Q8 — Concurrent Event Ingestion Benchmark (all 7 DBs)
 
@@ -124,142 +124,68 @@ action, one insert — across many concurrent users. This benchmark simulates th
 > This keeps all related context together and produces usable results after each database.
 
 ---
-### Redis
+
+### Cassandra
 
 #### Naive — Load
-
-**Loader** (`loaders/redis_naive_loader.py`):
-- [ ] Load all data as JSON strings at simple keys (no Redis data structures used)
-  - [ ] `user:{id}` → JSON string of user row
-  - [ ] `seller:{id}` → JSON string of seller_profile row
-  - [ ] `tier:{id}` → JSON string of subscription_tier row
-  - [ ] `tier_pricing:{tier_id}:{valid_from}` → JSON string of pricing row
-  - [ ] `subscription:{id}` → JSON string of subscription row
-  - [ ] `product:{id}` → JSON string of product row
-  - [ ] `invoice:{id}` → JSON string of invoice row
-  - [ ] `invoice_line:{id}` → JSON string of invoice_line row
-  - [ ] `order:{id}` → JSON string of order row
-  - [ ] `order_item:{id}` → JSON string of order_item row
-  - [ ] `session:{id}` → JSON string of session row (cart embedded as JSON string within JSON)
-  - [ ] `event:{id}` → JSON string of event row
-  - [ ] Index sets: `user_invoices:{user_id}` → SET of invoice IDs (for Q1/Q2 lookups)
-  - [ ] Index sets: `user_events:{user_id}` → ZSET of event IDs scored by timestamp (for Q6)
-
-#### Naive — Benchmark
-
-**Benchmarks** (`benchmarks/redis/naive_query.py`):
-- [ ] Q1 — Monthly revenue: fetch invoice IDs from set, GET each, aggregate in Python
-- [ ] Q2 — Invoice fetch: GET invoice + iterate invoice_line IDs + GET each line
-- [ ] Q3 — Session + cart: GET session JSON, deserialise full string
-- [ ] Q4 — Recommendations: fetch order_items per product, compute co-purchase in Python memory
-- [ ] Q5 — Product search: no native full-text — SCAN all product keys + Python string match (slow, naive)
-- [ ] Q6 — User events: ZRANGEBYSCORE on user_events ZSET + GET each event JSON
-- [ ] Q7 — Rolling revenue: fetch all invoice IDs, GET each, aggregate + window in Python
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `SET event:{id} {json}` per event, no pipelining
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Re-run naive at 10% and 50% data scale → `results/redis_naive_scale10.json` / `scale50.json`
-- [ ] Save to `results/redis_naive_Q{n}.json` for Q1–Q7, `results/redis_q8.json` for Q8
+**Loader** (`loaders/cassandra_naive_loader.py`):
+- [ ] Create keyspace `streamcart_naive`
+- [ ] Create tables mirroring SQL schema with naive partition keys
+  - [ ] `users` — PK: `id`
+  - [ ] `seller_profiles` — PK: `user_id`
+  - [ ] `subscription_tiers` — PK: `id`
+  - [ ] `subscription_tier_pricing` — PK: `tier_id`, clustering: `valid_from`
+  - [ ] `subscriptions` — PK: `id` (naive — not partitioned by user_id)
+  - [ ] `products` — PK: `id`
+  - [ ] `invoices` — PK: `id` (naive — not partitioned by user_id)
+  - [ ] `invoice_lines` — PK: `id`
+  - [ ] `orders` — PK: `id`
+  - [ ] `order_items` — PK: `id`
+  - [ ] `sessions` — PK: `id`
+  - [ ] `events` — PK: `user_id`, clustering: `occurred_at DESC`
 
 #### Optimised — Load
-
 **Schema redesign:**
-- [ ] Store session metadata as Redis Hash (`HSET`) — separate fields, no full-JSON deserialisation
-- [ ] Store cart as Redis List of serialised item strings
-- [ ] Store product fields as Redis Hash for fast field-level access
-- [ ] Store user events in a Sorted Set scored by timestamp (O(log N) range queries)
-- [ ] Store invoice line IDs in a Redis Set per invoice
-- [ ] Precompute co-purchase Sets per product at load time (for Q4)
-
-**Loader** (`loaders/redis_optimised_loader.py`):
-- [ ] Load all 12 tables with the redesigned schema above
-
-#### Optimised — Benchmark
-
-**Benchmarks** (`benchmarks/redis/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: ZRANGEBYSCORE on invoice sorted set + HGETALL per invoice, aggregate in Python
-- [ ] Q2 — Invoice fetch: HGETALL invoice + SMEMBERS invoice_lines set + pipeline HGETALL per line
-- [ ] Q3 — Session + cart: HGETALL session (no deserialisation) + LRANGE cart list
-- [ ] Q4 — Recommendations: SMEMBERS on precomputed co-purchase set (single command)
-- [ ] Q5 — Product search: SCAN with HGETALL filter (no structural improvement available without RediSearch)
-- [ ] Q6 — User events: ZRANGEBYSCORE on user events Sorted Set (O(log N) range)
-- [ ] Q7 — Rolling revenue: ZRANGEBYSCORE + pipeline HGETALL + Python windowing
-- [ ] Document changes in `benchmarks/redis/CHANGES.md`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/redis_optimised_Q{n}.json` for Q1–Q7
-- [ ] Re-run optimised at 10% and 50% data scale → `results/redis_optimised_scale10.json` / `scale50.json`
-
----
-
-### Neo4j
-
-#### Naive — Load
-
-**Loader** (`loaders/neo4j_naive_loader.py`):
-- [ ] Create nodes with flat properties for all 12 tables
-  - [ ] `User` nodes — all user fields as properties
-  - [ ] `SellerProfile` nodes
-  - [ ] `SubscriptionTier` nodes
-  - [ ] `SubscriptionTierPricing` nodes
-  - [ ] `Subscription` nodes
-  - [ ] `Product` nodes — all product fields as properties
-  - [ ] `Invoice` nodes
-  - [ ] `InvoiceLine` nodes
-  - [ ] `Order` nodes
-  - [ ] `OrderItem` nodes
-  - [ ] `Session` nodes — cart stored as JSON string property
-  - [ ] `Event` nodes
-- [ ] Create relationships mirroring FK structure (no precomputed weights)
-  - [ ] `(User)-[:HAS_SUBSCRIPTION]->(Subscription)`
-  - [ ] `(User)-[:PLACED]->(Order)`
-  - [ ] `(Order)-[:CONTAINS]->(OrderItem)-[:FOR_PRODUCT]->(Product)`
-  - [ ] `(User)-[:HAS_SESSION]->(Session)`
-  - [ ] `(User)-[:TRIGGERED]->(Event)`
-  - [ ] `(Event)-[:RELATES_TO]->(Product)`
-
-#### Naive — Benchmark
-
-**Benchmarks** (`benchmarks/neo4j/naive_query.py`):
-- [ ] Q1 — Monthly revenue: Cypher aggregation across Invoice + Subscription + SubscriptionTierPricing nodes
-- [ ] Q2 — Invoice fetch: MATCH invoice + separate MATCH invoice lines (two queries, no path traversal)
-- [ ] Q3 — Session + cart: MATCH session node, return cart property, deserialise JSON string
-- [ ] Q4 — Recommendations: naive 2-hop traversal `(u)-[:PLACED]->(:Order)-[:CONTAINS]->(:OrderItem)-[:FOR_PRODUCT]->(p)` (no precomputed weights)
-- [ ] Q5 — Product search: Cypher `CONTAINS` or `=~` regex on name/description (no full-text index)
-- [ ] Q6 — User events: MATCH events WHERE user_id AND occurred_at range
-- [ ] Q7 — Rolling revenue: Cypher date aggregation + manual window calculation in Python
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `CREATE (e:Event {...})` Cypher call per event
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/neo4j_naive_Q{n}.json` for Q1–Q7, `results/neo4j_q8.json` for Q8
-
-#### Optimised — Load
-
-**Schema redesign:**
-- [ ] Precompute `ALSO_BOUGHT` relationships between products (weighted by co-purchase count)
-- [ ] Store co-purchase count and confidence score as relationship properties
-- [ ] Store cart as native list property on Session nodes (not JSON string)
-- [ ] Add full-text index on Product name + description (for Q5)
-- [ ] Add composite index on (user_id, occurred_at) for Event nodes (for Q6)
-
-**Loader** (`loaders/neo4j_optimised_loader.py`):
+- [ ] Composite partition key `(user_id, month)` on events — avoids hot partitions, enables range scans
+- [ ] `occurred_at` as clustering column on events
+- [ ] Separate query tables (denormalised) for the main access patterns:
+  - [ ] `invoices_by_user` — partitioned by `user_id`, clustered by `created_at`
+  - [ ] `invoice_lines_by_invoice` — partitioned by `invoice_id`
+  - [ ] `products_by_name` — for Q5 prefix match workaround
+  - [ ] `product_copurchases` — precomputed co-purchase counts (for Q4)
+- [ ] Prepared statements for all queries
+**Loader** (`loaders/cassandra_optimised_loader.py`):
+- [ ] Create keyspace `streamcart_optimised`
 - [ ] Load all 12 tables with redesigned schema above
-- [ ] After loading, run a post-load step to compute and create all `ALSO_BOUGHT` edges
+
+#### Naive — Benchmark
+**Benchmarks** (`benchmarks/cassandra/naive_query.py`):
+- [ ] Q1 — Monthly revenue: full table scan on invoices + subscriptions, aggregate in Python
+- [ ] Q2 — Invoice fetch: SELECT invoice by ID + SELECT lines WHERE invoice_id (secondary index — slow)
+- [ ] Q3 — Session + cart: SELECT session by ID
+- [ ] Q4 — Recommendations: full scan of order_items, compute co-purchase in Python (no graph)
+- [ ] Q5 — Product search: `LIKE` on name with ALLOW FILTERING (very slow, intentionally naive)
+- [ ] Q6 — User events: SELECT WHERE user_id AND occurred_at range
+- [ ] Q7 — Rolling revenue: full scan on invoices, bucket + window in Python
+- [ ] Q8 — Concurrent ingestion: 100 threads, one `session.execute()` per event, no `execute_concurrent`
+- [ ] Run 1000 iterations per query (50 warm-up) with harness
+- [ ] Re-run naive at 10% and 50% data scale → `results/cassandra_naive_scale10.json` / `scale50.json`
+- [ ] Save to `results/cassandra_naive_Q{n}.json` for Q1–Q7, `results/cassandra_q8.json` for Q8
 
 #### Optimised — Benchmark
 
-**Benchmarks** (`benchmarks/neo4j/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: Cypher aggregation with direct Subscription→Invoice traversal
-- [ ] Q2 — Invoice fetch: single path MATCH `(i:Invoice)-[:HAS_LINE]->(l:InvoiceLine)`
-- [ ] Q3 — Session + cart: MATCH session node, return cart as native list (no deserialisation)
-- [ ] Q4 — Recommendations: single-hop traversal on precomputed `ALSO_BOUGHT` edges
-- [ ] Q5 — Product search: native Neo4j full-text index search
-- [ ] Q6 — User events: composite index-backed range query on Event nodes
-- [ ] Q7 — Rolling revenue: Cypher date grouping + `apoc.agg.statistics` window
-- [ ] Document changes in `benchmarks/neo4j/CHANGES.md`
+**Benchmarks** (`benchmarks/cassandra/optimised_query.py`):
+- [ ] Q1 — Monthly revenue: partition scan on `invoices_by_user` + Python aggregation per tier
+- [ ] Q2 — Invoice fetch: SELECT from `invoices_by_user` + SELECT from `invoice_lines_by_invoice`
+- [ ] Q3 — Session + cart: SELECT session by ID (no structural improvement — already a single row)
+- [ ] Q4 — Recommendations: SELECT from precomputed `product_copurchases` table
+- [ ] Q5 — Product search: SELECT from `products_by_name` (prefix match only — Cassandra limit, document this)
+- [ ] Q6 — User events: composite partition key scan `WHERE user_id=? AND month=?` + range on occurred_at
+- [ ] Q7 — Rolling revenue: `invoices_by_user` scan + Python windowing
+- [ ] Document changes in `benchmarks/cassandra/CHANGES.md`
 - [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/neo4j_optimised_Q{n}.json` for Q1–Q7
-
-#### Scalability
-- [ ] Re-run naive at 10% and 50% data scale → `results/neo4j_naive_scale10.json` / `scale50.json`
-- [ ] Re-run optimised at 10% and 50% data scale → `results/neo4j_optimised_scale10.json` / `scale50.json`
+- [ ] Re-run optimised at 10% and 50% data scale → `results/cassandra_optimised_scale10.json` / `scale50.json`
+- [ ] Save to `results/cassandra_optimised_Q{n}.json` for Q1–Q7
 
 ---
 
@@ -327,76 +253,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 #### Scalability
 - [ ] Re-run naive at 10% and 50% data scale → `results/elasticsearch_naive_scale10.json` / `scale50.json`
 - [ ] Re-run optimised at 10% and 50% data scale → `results/elasticsearch_optimised_scale10.json` / `scale50.json`
-
----
-
-### Cassandra
-
-#### Naive — Load
-
-**Loader** (`loaders/cassandra_naive_loader.py`):
-- [ ] Create keyspace `streamcart_naive`
-- [ ] Create tables mirroring SQL schema with naive partition keys
-  - [ ] `users` — PK: `id`
-  - [ ] `seller_profiles` — PK: `user_id`
-  - [ ] `subscription_tiers` — PK: `id`
-  - [ ] `subscription_tier_pricing` — PK: `tier_id`, clustering: `valid_from`
-  - [ ] `subscriptions` — PK: `id` (naive — not partitioned by user_id)
-  - [ ] `products` — PK: `id`
-  - [ ] `invoices` — PK: `id` (naive — not partitioned by user_id)
-  - [ ] `invoice_lines` — PK: `id`
-  - [ ] `orders` — PK: `id`
-  - [ ] `order_items` — PK: `id`
-  - [ ] `sessions` — PK: `id`
-  - [ ] `events` — PK: `user_id`, clustering: `occurred_at DESC`
-
-#### Naive — Benchmark
-
-**Benchmarks** (`benchmarks/cassandra/naive_query.py`):
-- [ ] Q1 — Monthly revenue: full table scan on invoices + subscriptions, aggregate in Python
-- [ ] Q2 — Invoice fetch: SELECT invoice by ID + SELECT lines WHERE invoice_id (secondary index — slow)
-- [ ] Q3 — Session + cart: SELECT session by ID
-- [ ] Q4 — Recommendations: full scan of order_items, compute co-purchase in Python (no graph)
-- [ ] Q5 — Product search: `LIKE` on name with ALLOW FILTERING (very slow, intentionally naive)
-- [ ] Q6 — User events: SELECT WHERE user_id AND occurred_at range
-- [ ] Q7 — Rolling revenue: full scan on invoices, bucket + window in Python
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `session.execute()` per event, no `execute_concurrent`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/cassandra_naive_Q{n}.json` for Q1–Q7, `results/cassandra_q8.json` for Q8
-
-#### Optimised — Load
-
-**Schema redesign:**
-- [ ] Composite partition key `(user_id, month)` on events — avoids hot partitions, enables range scans
-- [ ] `occurred_at` as clustering column on events
-- [ ] Separate query tables (denormalised) for the main access patterns:
-  - [ ] `invoices_by_user` — partitioned by `user_id`, clustered by `created_at`
-  - [ ] `invoice_lines_by_invoice` — partitioned by `invoice_id`
-  - [ ] `products_by_name` — for Q5 prefix match workaround
-  - [ ] `product_copurchases` — precomputed co-purchase counts (for Q4)
-- [ ] Prepared statements for all queries
-
-**Loader** (`loaders/cassandra_optimised_loader.py`):
-- [ ] Create keyspace `streamcart_optimised`
-- [ ] Load all 12 tables with redesigned schema above
-
-#### Optimised — Benchmark
-
-**Benchmarks** (`benchmarks/cassandra/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: partition scan on `invoices_by_user` + Python aggregation per tier
-- [ ] Q2 — Invoice fetch: SELECT from `invoices_by_user` + SELECT from `invoice_lines_by_invoice`
-- [ ] Q3 — Session + cart: SELECT session by ID (no structural improvement — already a single row)
-- [ ] Q4 — Recommendations: SELECT from precomputed `product_copurchases` table
-- [ ] Q5 — Product search: SELECT from `products_by_name` (prefix match only — Cassandra limit, document this)
-- [ ] Q6 — User events: composite partition key scan `WHERE user_id=? AND month=?` + range on occurred_at
-- [ ] Q7 — Rolling revenue: `invoices_by_user` scan + Python windowing
-- [ ] Document changes in `benchmarks/cassandra/CHANGES.md`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/cassandra_optimised_Q{n}.json` for Q1–Q7
-
-#### Scalability
-- [ ] Re-run naive at 10% and 50% data scale → `results/cassandra_naive_scale10.json` / `scale50.json`
-- [ ] Re-run optimised at 10% and 50% data scale → `results/cassandra_optimised_scale10.json` / `scale50.json`
 
 ---
 

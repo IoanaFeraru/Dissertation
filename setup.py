@@ -1,8 +1,9 @@
 """
 setup.py — Phase 0 Health Check
 ================================
-Connects to all 7 databases and prints OK / FAIL for each.
+Connects to all databases and prints OK / FAIL for each.
 MongoDB is checked twice — once for the naive DB, once for optimised.
+Neo4j is checked twice — once for the naive container, once for optimised.
 
 Usage:
     python setup.py               # runs health check
@@ -53,6 +54,7 @@ def check_postgres():
     ok("PostgreSQL")
     return True
 
+
 def _check_mongo_db(env_var: str, label: str) -> bool:
     """Shared logic for checking a named MongoDB database."""
     from pymongo import MongoClient
@@ -71,37 +73,48 @@ def _check_mongo_db(env_var: str, label: str) -> bool:
     ok(f"{label} ({db_name}, {count} collections)")
     return True
 
+
 def check_mongodb_naive():
     return _check_mongo_db("MONGO_DB_NAIVE", "MongoDB naive")
+
 
 def check_mongodb_optimised():
     return _check_mongo_db("MONGO_DB_OPTIMISED", "MongoDB optimised")
 
-def check_redis():
-    import redis
-    r = redis.Redis(
-        host="localhost",
-        port=6379,
-        password=os.getenv("REDIS_PASSWORD"),
-        socket_connect_timeout=5,
-    )
-    r.ping()
-    ok("Redis")
-    return True
 
-def check_neo4j():
+def _check_neo4j(port: int, label: str) -> bool:
+    """Shared logic for checking a Neo4j container by Bolt port."""
     from neo4j import GraphDatabase
-    user     = os.getenv("NEO4J_USER")
+    user     = os.getenv("NEO4J_USER", "neo4j")
     password = os.getenv("NEO4J_PASSWORD")
     driver   = GraphDatabase.driver(
-        "bolt://localhost:7687",
+        f"bolt://localhost:{port}",
         auth=(user, password),
         connection_timeout=5,
     )
     driver.verify_connectivity()
+    # Count nodes as a simple data presence check
+    with driver.session() as session:
+        result = session.run("MATCH (n) RETURN count(n) AS cnt")
+        count  = result.single()["cnt"]
     driver.close()
-    ok("Neo4j")
+    ok(f"{label} (port {port}, {count:,} nodes)")
     return True
+
+
+def check_neo4j_naive():
+    return _check_neo4j(
+        int(os.getenv("NEO4J_NAIVE_PORT", 7687)),
+        "Neo4j naive",
+    )
+
+
+def check_neo4j_optimised():
+    return _check_neo4j(
+        int(os.getenv("NEO4J_OPTIMISED_PORT", 7688)),
+        "Neo4j optimised",
+    )
+
 
 def check_elasticsearch():
     import urllib.request
@@ -113,6 +126,7 @@ def check_elasticsearch():
         raise RuntimeError(f"Cluster health is RED: {health}")
     ok("Elasticsearch")
     return True
+
 
 def check_cassandra():
     from cassandra.cluster import Cluster
@@ -133,6 +147,7 @@ def check_cassandra():
     ok("Cassandra")
     return True
 
+
 def check_timescaledb():
     import psycopg2
     conn = psycopg2.connect(
@@ -152,20 +167,21 @@ def check_timescaledb():
     ok("TimescaleDB")
     return True
 
+
 # ── runner ────────────────────────────────────────────────────────────────────
 
-# MongoDB optimised is marked optional=True — it will legitimately be empty
-# until the optimised loader has been run, and that should not block other work.
+# optional=True — will legitimately be empty until the optimised loader has run.
 CHECKS = [
     ("PostgreSQL",          check_postgres,           False),
     ("MongoDB naive",       check_mongodb_naive,      False),
-    ("MongoDB optimised",   check_mongodb_optimised,  True),   # optional until loader runs
-    ("Redis",               check_redis,              False),
-    ("Neo4j",               check_neo4j,              False),
+    ("MongoDB optimised",   check_mongodb_optimised,  True),
+    ("Neo4j naive",         check_neo4j_naive,        False),
+    ("Neo4j optimised",     check_neo4j_optimised,    True),  # optional until loader runs
     ("Elasticsearch",       check_elasticsearch,      False),
     ("Cassandra",           check_cassandra,          False),
     ("TimescaleDB",         check_timescaledb,        False),
 ]
+
 
 def run_checks(wait=False, max_wait_seconds=120):
     print("\n" + "═" * 55)
@@ -190,7 +206,7 @@ def run_checks(wait=False, max_wait_seconds=120):
                         print(f"  {YELLOW}○ {name:<32} not loaded yet (optional){RESET}")
                     else:
                         fail(name, str(e))
-                    results[name] = optional  # optional failures do not count as failures
+                    results[name] = optional
                     break
 
     # ── summary ──────────────────────────────────────────────────────────────
@@ -220,6 +236,7 @@ def run_checks(wait=False, max_wait_seconds=120):
         if not wait:
             warn("Tip: run with --wait if containers are still starting up")
         return 1
+
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
