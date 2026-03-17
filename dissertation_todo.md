@@ -126,66 +126,9 @@ action, one insert — across many concurrent users. This benchmark simulates th
 ---
 
 ### Cassandra
-
-#### Naive — Load
-**Loader** (`loaders/cassandra_naive_loader.py`):
-- [ ] Create keyspace `streamcart_naive`
-- [ ] Create tables mirroring SQL schema with naive partition keys
-  - [ ] `users` — PK: `id`
-  - [ ] `seller_profiles` — PK: `user_id`
-  - [ ] `subscription_tiers` — PK: `id`
-  - [ ] `subscription_tier_pricing` — PK: `tier_id`, clustering: `valid_from`
-  - [ ] `subscriptions` — PK: `id` (naive — not partitioned by user_id)
-  - [ ] `products` — PK: `id`
-  - [ ] `invoices` — PK: `id` (naive — not partitioned by user_id)
-  - [ ] `invoice_lines` — PK: `id`
-  - [ ] `orders` — PK: `id`
-  - [ ] `order_items` — PK: `id`
-  - [ ] `sessions` — PK: `id`
-  - [ ] `events` — PK: `user_id`, clustering: `occurred_at DESC`
-
-#### Optimised — Load
-**Schema redesign:**
-- [ ] Composite partition key `(user_id, month)` on events — avoids hot partitions, enables range scans
-- [ ] `occurred_at` as clustering column on events
-- [ ] Separate query tables (denormalised) for the main access patterns:
-  - [ ] `invoices_by_user` — partitioned by `user_id`, clustered by `created_at`
-  - [ ] `invoice_lines_by_invoice` — partitioned by `invoice_id`
-  - [ ] `products_by_name` — for Q5 prefix match workaround
-  - [ ] `product_copurchases` — precomputed co-purchase counts (for Q4)
-- [ ] Prepared statements for all queries
-**Loader** (`loaders/cassandra_optimised_loader.py`):
-- [ ] Create keyspace `streamcart_optimised`
-- [ ] Load all 12 tables with redesigned schema above
-
 #### Naive — Benchmark
 **Benchmarks** (`benchmarks/cassandra/naive_query.py`):
-- [ ] Q1 — Monthly revenue: full table scan on invoices + subscriptions, aggregate in Python
-- [ ] Q2 — Invoice fetch: SELECT invoice by ID + SELECT lines WHERE invoice_id (secondary index — slow)
-- [ ] Q3 — Session + cart: SELECT session by ID
-- [ ] Q4 — Recommendations: full scan of order_items, compute co-purchase in Python (no graph)
-- [ ] Q5 — Product search: `LIKE` on name with ALLOW FILTERING (very slow, intentionally naive)
-- [ ] Q6 — User events: SELECT WHERE user_id AND occurred_at range
-- [ ] Q7 — Rolling revenue: full scan on invoices, bucket + window in Python
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `session.execute()` per event, no `execute_concurrent`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Re-run naive at 10% and 50% data scale → `results/cassandra_naive_scale10.json` / `scale50.json`
-- [ ] Save to `results/cassandra_naive_Q{n}.json` for Q1–Q7, `results/cassandra_q8.json` for Q8
-
-#### Optimised — Benchmark
-
-**Benchmarks** (`benchmarks/cassandra/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: partition scan on `invoices_by_user` + Python aggregation per tier
-- [ ] Q2 — Invoice fetch: SELECT from `invoices_by_user` + SELECT from `invoice_lines_by_invoice`
-- [ ] Q3 — Session + cart: SELECT session by ID (no structural improvement — already a single row)
-- [ ] Q4 — Recommendations: SELECT from precomputed `product_copurchases` table
-- [ ] Q5 — Product search: SELECT from `products_by_name` (prefix match only — Cassandra limit, document this)
-- [ ] Q6 — User events: composite partition key scan `WHERE user_id=? AND month=?` + range on occurred_at
-- [ ] Q7 — Rolling revenue: `invoices_by_user` scan + Python windowing
-- [ ] Document changes in `benchmarks/cassandra/CHANGES.md`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Re-run optimised at 10% and 50% data scale → `results/cassandra_optimised_scale10.json` / `scale50.json`
-- [ ] Save to `results/cassandra_optimised_Q{n}.json` for Q1–Q7
+- Cassandra q4
 
 ---
 
@@ -378,9 +321,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 - [ ] Cross-DB comparison chart and interpretation
 - [ ] Statistical tests on latency distributions (Mann-Whitney U or t-test)
 
-### Literature Review
-- [ ] Minimum 25–35 academic and industry sources, APA citation style
-
 ### Introduction
 - [ ] Background and practical relevance
 - [ ] Problem statement — default reliance on PostgreSQL
@@ -414,7 +354,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 
 ### Code & Reproducibility
 - [ ] Clean up the Git repository — remove debug code and temporary files
-- [ ] Verify `run_all.py` works from a clean clone
 - [ ] Write `README.md` with setup and run instructions
 - [ ] Document the fixed random seed for reproducibility
 

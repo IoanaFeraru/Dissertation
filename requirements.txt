@@ -6,7 +6,6 @@ graphviz
 # Database drivers
 psycopg2-binary          # PostgreSQL + TimescaleDB
 pymongo                  # MongoDB
-redis                    # Redis
 neo4j                    # Neo4j (Bolt protocol)
 qdrant-client            # Qdrant vector DB
 cassandra-driver         # Apache Cassandra
