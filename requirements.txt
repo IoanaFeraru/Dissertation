@@ -29,3 +29,5 @@ seaborn                  # Styled charts
 # Environment
 python-dotenv            # Load .env file
 docker
+
+elasticsearch

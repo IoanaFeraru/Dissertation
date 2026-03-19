@@ -132,78 +132,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 
 ---
 
-### Elasticsearch
-
-#### Naive — Load
-
-**Loader** (`loaders/elasticsearch_naive_loader.py`):
-- [ ] Create all 12 indices with default mapping (no custom analysers, no field boosting)
-  - [ ] `users` index
-  - [ ] `seller_profiles` index
-  - [ ] `subscription_tiers` index
-  - [ ] `subscription_tier_pricing` index
-  - [ ] `subscriptions` index
-  - [ ] `products` index — name, description, attributes as plain `text` (no boosting)
-  - [ ] `invoices` index
-  - [ ] `invoice_lines` index — `invoice_id` as plain keyword field (not nested)
-  - [ ] `orders` index
-  - [ ] `order_items` index
-  - [ ] `sessions` index — cart stored as JSON string
-  - [ ] `events` index
-
-#### Naive — Benchmark
-
-**Benchmarks** (`benchmarks/elasticsearch/naive_query.py`):
-- [ ] Q1 — Monthly revenue: `date_histogram` aggregation on invoices + Python join to subscription/tier data
-- [ ] Q2 — Invoice fetch: `get` by invoice ID + `search` for lines by `invoice_id` term query
-- [ ] Q3 — Session + cart: `get` session document by ID, deserialise cart JSON string
-- [ ] Q4 — Recommendations: multi-step Python orchestration — search buyers of product X, aggregate their other purchases
-- [ ] Q5 — Product search: `multi_match` across name, description, product_type — default scoring, no boosting
-- [ ] Q6 — User events: `range` query on `occurred_at` filtered by `user_id` term
-- [ ] Q7 — Rolling revenue: `date_histogram` + `sum` aggregation, no gap-filling
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `index()` call per event, no bulk API
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/elasticsearch_naive_Q{n}.json` for Q1–Q7, `results/elasticsearch_q8.json` for Q8
-
-#### Optimised — Load
-
-**Schema redesign:**
-- [ ] Custom analyser on products index: English stemming + stop words + synonym expansion
-- [ ] Field-level boosting: `name^3`, `description^1.5`, `product_type^1`
-- [ ] Keyword sub-fields on `product_type` and `price_usd` for faceted filtering
-- [ ] Enable `norms` on name, disable on low-signal fields
-- [ ] Embed invoice_lines as nested objects inside invoice documents (for Q2)
-- [ ] Embed event metadata as native object, not string (for Q6)
-- [ ] `date`-optimised mappings on all timestamp fields
-
-**Loader** (`loaders/elasticsearch_optimised_loader.py`):
-- [ ] Load all 12 tables with the redesigned mappings above
-
-#### Optimised — Benchmark
-
-**Benchmarks** (`benchmarks/elasticsearch/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: `date_histogram` + `terms` aggregation with sub-aggregations
-- [ ] Q2 — Invoice fetch: single `get` by invoice ID (lines embedded as nested objects)
-- [ ] Q3 — Session + cart: single `get` by session ID (cart as native array)
-- [ ] Q4 — Recommendations: `terms` aggregation on co-buyers (still Python-orchestrated — no graph)
-- [ ] Q5 — Product search: `multi_match` with `best_fields` + boosts + product_type filter
-- [ ] Q6 — User events: `range` query with composite (user_id + occurred_at) optimised mapping
-- [ ] Q7 — Rolling revenue: `date_histogram` with `extended_bounds` for gap-filling
-- [ ] Document changes in `benchmarks/elasticsearch/CHANGES.md`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/elasticsearch_optimised_Q{n}.json` for Q1–Q7
-
-#### Scalability
-- [ ] Re-run naive at 10% and 50% data scale → `results/elasticsearch_naive_scale10.json` / `scale50.json`
-- [ ] Re-run optimised at 10% and 50% data scale → `results/elasticsearch_optimised_scale10.json` / `scale50.json`
-
----
-
-**✅ Phase 3 Deliverable:** All 6 specialised DBs fully implemented (naive + optimised). Q1–Q8
-benchmarked on every DB. Scalability data at 3 scales per killer query. All results saved.
-
----
-
 ## Phase 4 — Analysis & Visualisation
 
 ### Result Aggregation
@@ -248,13 +176,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 ---
 
 ## Phase 5 — Writing
-
-### Methodology and Tools (write first — can be done during benchmark run time)
-- [ ] Benchmark harness design (p50/p95/p99, threading, warm-up)
-- [ ] Full-scope benchmark rationale — why all queries run on all DBs (engine effect vs schema effect)
-- [ ] Naive specialised schema per DB — design decisions
-- [ ] Optimised specialised schema per DB — design decisions and justifications
-- [ ] Defence of single Q8 level — why micro-batching was excluded as an application-level rather than schema-level optimisation
 
 ### Results and Discussion (write second)
 - [ ] Benchmark results per DB with charts — full Q1–Q8 matrix per DB
@@ -307,14 +228,14 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 
 ## Progress Tracker
 
-| Phase | Status        | Date Target | Completed |
-|---|---------------|---|---|
-| 0 — Environment Setup | ✅ Complete    | — | 2026-02-20 |
-| 1 — Schema & Data Generation | ✅ Complete    | — | 2026-02-24 |
-| 2 — PostgreSQL Baselines | ✅ Complete    | — | 2026-03-04 |
-| 3 — Specialised Implementations | ⬜ Started     | 2026-03-20 | — |
-| 4 — Analysis & Visualisation | ⬜ Not started | 2026-04-01 | — |
-| 5 — Writing | ⬜ Not started | 2026-04-20 | — |
-| 6 — Review & Polish | ⬜ Not started | 2026-05-15 | — |
+| Phase | Status        | Date Target | Completed  |
+|---|---------------|-------------|------------|
+| 0 — Environment Setup | ✅ Complete    | —           | 2026-02-20 |
+| 1 — Schema & Data Generation | ✅ Complete    | —           | 2026-02-24 |
+| 2 — PostgreSQL Baselines | ✅ Complete    | —           | 2026-03-04 |
+| 3 — Specialised Implementations | ✅ Complete     | —           | 2026-03-19 |
+| 4 — Analysis & Visualisation | ⬜ Not started | 2026-04-01  | —          |
+| 5 — Writing | ⬜ Not started | 2026-04-20  | —          |
+| 6 — Review & Polish | ⬜ Not started | 2026-05-15  | —          |
 
 ---
