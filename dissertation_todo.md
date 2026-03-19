@@ -199,61 +199,6 @@ action, one insert — across many concurrent users. This benchmark simulates th
 
 ---
 
-### TimescaleDB
-
-#### Naive — Load
-
-**Loader** (`loaders/timescaledb_naive_loader.py`):
-- [ ] Create all 12 tables identical to PostgreSQL schema
-- [ ] Enable hypertable on `events` and `invoices` (time partitioning only — no aggregates yet)
-- [ ] Load all data from PostgreSQL master via psycopg2
-
-#### Naive — Benchmark
-
-**Benchmarks** (`benchmarks/timescaledb/naive_query.py`):
-- [ ] Q1 — Monthly revenue: same SQL as PostgreSQL baseline (no TimescaleDB-specific features)
-- [ ] Q2 — Invoice fetch: same SQL JOIN as PostgreSQL baseline
-- [ ] Q3 — Session + cart: same SQL as PostgreSQL baseline
-- [ ] Q4 — Recommendations: same SQL co-purchase aggregation as PostgreSQL baseline
-- [ ] Q5 — Product search: same tsvector search as PostgreSQL baseline
-- [ ] Q6 — User events: same SQL range query as PostgreSQL baseline
-- [ ] Q7 — Rolling revenue: plain SQL window functions on raw data (no `time_bucket_gapfill`)
-- [ ] Q8 — Concurrent ingestion: 100 threads, one `INSERT` per event via psycopg2
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/timescaledb_naive_Q{n}.json` for Q1–Q7, `results/timescaledb_q8.json` for Q8
-
-#### Optimised — Load
-
-**Schema redesign:**
-- [ ] Hypertable on `events` chunked by week, `invoices` chunked by month
-- [ ] Continuous aggregate for daily revenue per subscription tier (powers Q1 and Q7)
-- [ ] Enable compression on chunks older than 7 days
-- [ ] Add retention policy (demonstrates time-series-native feature set)
-
-**Loader** (`loaders/timescaledb_optimised_loader.py`):
-- [ ] Load all 12 tables with redesigned schema above
-- [ ] Create continuous aggregate after data load
-
-#### Optimised — Benchmark
-
-**Benchmarks** (`benchmarks/timescaledb/optimised_query.py`):
-- [ ] Q1 — Monthly revenue: query continuous aggregate view with `time_bucket`
-- [ ] Q2 — Invoice fetch: same SQL JOIN as naive (TimescaleDB adds nothing for document-style fetch)
-- [ ] Q3 — Session + cart: same SQL as naive
-- [ ] Q4 — Recommendations: same co-purchase SQL as naive (no graph advantage)
-- [ ] Q5 — Product search: same tsvector as naive (no text search advantage)
-- [ ] Q6 — User events: hypertable chunk-pruned range scan on events
-- [ ] Q7 — Rolling revenue: `time_bucket_gapfill()` on continuous aggregate — gap-filling included
-- [ ] Document changes in `benchmarks/timescaledb/CHANGES.md`
-- [ ] Run 1000 iterations per query (50 warm-up) with harness
-- [ ] Save to `results/timescaledb_optimised_Q{n}.json` for Q1–Q7
-
-#### Scalability
-- [ ] Re-run naive at 10% and 50% data scale → `results/timescaledb_naive_scale10.json` / `scale50.json`
-- [ ] Re-run optimised at 10% and 50% data scale → `results/timescaledb_optimised_scale10.json` / `scale50.json`
-
----
-
 **✅ Phase 3 Deliverable:** All 6 specialised DBs fully implemented (naive + optimised). Q1–Q8
 benchmarked on every DB. Scalability data at 3 scales per killer query. All results saved.
 
@@ -307,7 +252,6 @@ benchmarked on every DB. Scalability data at 3 scales per killer query. All resu
 ### Methodology and Tools (write first — can be done during benchmark run time)
 - [ ] Benchmark harness design (p50/p95/p99, threading, warm-up)
 - [ ] Full-scope benchmark rationale — why all queries run on all DBs (engine effect vs schema effect)
-- [ ] PostgreSQL baseline design and query implementations
 - [ ] Naive specialised schema per DB — design decisions
 - [ ] Optimised specialised schema per DB — design decisions and justifications
 - [ ] Defence of single Q8 level — why micro-batching was excluded as an application-level rather than schema-level optimisation
