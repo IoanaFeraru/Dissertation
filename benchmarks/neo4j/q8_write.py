@@ -64,7 +64,7 @@ RESOURCE_SAMPLE_S = 1.0
 # No FK constraints — matches the PostgreSQL staging table design.
 
 CREATE_CYPHER = """
-MERGE (e:EventQ8 {id: $id})
+MERGE (e:EventQ8_1 {id: $id})
 ON CREATE SET
     e.user_id     = $user_id,
     e.event_type  = $event_type,

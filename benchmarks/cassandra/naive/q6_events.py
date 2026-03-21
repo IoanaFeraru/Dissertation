@@ -206,7 +206,7 @@ def dry_run(session, pairs: list[tuple]):
 def main():
     parser = argparse.ArgumentParser(description="Cassandra naive Q6 events benchmark")
     parser.add_argument(
-        "--iterations", type=int, default=50,
+        "--iterations", type=int, default=1000,
         help=(
             "Measured iterations (default: 50 for naive Q6). "
             "Each iteration reads ~1M rows (~30-60s). 1000 iterations = 8+ hours "
@@ -268,13 +268,13 @@ def main():
             "only — 3 cols vs 7) to find matching rows; pass 2 does PK lookups "
             "for ~20-30 matches. Full table scan penalty fully measured. "
             "Session reconnected per iteration to prevent GC ConnectionShutdown. "
-            f"Warmup=3 (not 10). Iterations={args.iterations} (not 1000). "
+            f"Warmup=10. Iterations={args.iterations} (not 1000). "
             f"Window centred ±15 days on sampled anchor event. "
             f"Pool of {args.pool_size} (user_id, anchor) pairs."
         )
 
         print(f"\n  Running CASSANDRA_NAIVE Q6 (custom reconnect loop) — "
-              f"{args.iterations} iterations + 3 warm-up")
+              f"{args.iterations} iterations + 10 warm-up")
 
         def _single_scan():
             """
@@ -293,7 +293,7 @@ def main():
             every row in the events table. The schema effect is unchanged.
             """
             c2, s2 = get_session(keyspace=KEYSPACE, request_timeout=300.0)
-            s2.default_fetch_size = 5_000   # larger pages are fine with reconnect
+            s2.default_fetch_size = 20_000   # larger pages are fine with reconnect
             try:
                 user_id, anchor_dt = random.choice(pairs)
                 start, end = anchor_window(anchor_dt)
@@ -312,16 +312,17 @@ def main():
                     if start_n <= occ < end_n:
                         matching_ids.append((row.id, row.occurred_at))
 
-                # Pass 2: PK lookup for full details (~20-30 fast reads)
                 results = []
-                for eid, occ_at in matching_ids:
-                    full = s2.execute(
-                        "SELECT id, event_type, occurred_at, product_id, "
-                        "session_id, metadata FROM events WHERE id = %s",
-                        (eid,),
-                    ).one()
-                    if full:
-                        results.append(full)
+                # Pass 2: single query instead of a loop of ~20-30 reads
+                if matching_ids:
+                    id_list = [eid for eid, _ in matching_ids]
+                    placeholders = ", ".join(["%s"] * len(id_list))
+                    rows = s2.execute(
+                        f"SELECT id, event_type, occurred_at, product_id, "
+                        f"session_id, metadata FROM events WHERE id IN ({placeholders})",
+                        id_list,
+                    )
+                    results = list(rows)
 
                 results.sort(key=lambda r: r.occurred_at or datetime.min, reverse=True)
                 return results
@@ -329,10 +330,10 @@ def main():
                 c2.shutdown()
 
         import time as _time
-        print("  Warm-up (3 scans)...")
-        for i in range(3):
+        print("  Warm-up (10 scans)...")
+        for i in range(10):
             _single_scan()
-            print(f"    warm-up {i+1}/3 done")
+            print(f"    warm-up {i+1}/10 done")
 
         timings = []
         wall_start = _time.perf_counter()
@@ -370,7 +371,7 @@ def main():
         result = {
             "db": "cassandra_naive", "query_id": "Q6", "label": label,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "iterations": n, "warmup_runs": 3, "concurrency": 1,
+            "iterations": n, "warmup_runs": 10, "concurrency": 1,
             "wall_time_s": round(wall_elapsed, 3),
             "latency_ms": stats,
             "raw_timings_ms": [round(t, 4) for t in timings],

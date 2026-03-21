@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 DEFAULT_THREADS   = 100
 DEFAULT_CSV_PATH  = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "data", "events_q8.csv"
+    os.path.dirname(__file__), "..", "..", "data", "events_q8.csv"
 )
 DOCKER_CONTAINER  = "dissertation_mongodb"
 RESOURCE_SAMPLE_S = 1.0
@@ -59,9 +59,9 @@ def build_uri() -> tuple[str, str]:
     """Return (mongo_uri, db_name) — resolved from env before any threads start."""
     user     = os.getenv("MONGO_USER")
     password = os.getenv("MONGO_PASSWORD")
-    db_name  = os.getenv("MONGO_DB")
+    db_name  = os.getenv("MONGO_DB_NAIVE")
     if not all([user, password, db_name]):
-        raise RuntimeError("MONGO_USER / MONGO_PASSWORD / MONGO_DB not set in .env")
+        raise RuntimeError("MONGO_USER / MONGO_PASSWORD / MONGO_DB_NAIVE not set in .env")
     return f"mongodb://{user}:{password}@localhost:27017/", db_name
 
 # ── CSV loading ───────────────────────────────────────────────────────────────
