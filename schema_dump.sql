@@ -73,23 +73,6 @@ CREATE TABLE public.events (
 ALTER TABLE public.events OWNER TO postgres;
 
 --
--- Name: events_q8; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.events_q8 (
-    id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    event_type character varying(50) NOT NULL,
-    product_id uuid,
-    session_id character varying(64),
-    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
-    occurred_at timestamp with time zone NOT NULL
-);
-
-
-ALTER TABLE public.events_q8 OWNER TO postgres;
-
---
 -- Name: invoice_lines; Type: TABLE; Schema: public; Owner: postgres
 --
 
