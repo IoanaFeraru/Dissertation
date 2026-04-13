@@ -146,7 +146,7 @@ def main():
                         help="Fix a single search term (default: random from pool)")
     parser.add_argument(
         "--output", type=str,
-        default=os.path.join("results", "cassandra_naive_Q5.json"),
+        default=os.path.join("../results", "cassandra_naive_Q5.json"),
     )
     args = parser.parse_args()
 

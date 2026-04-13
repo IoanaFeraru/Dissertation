@@ -132,7 +132,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", dest="dry_run")
     parser.add_argument(
         "--output", type=str,
-        default=os.path.join("results", "cassandra_naive_Q3.json"),
+        default=os.path.join("../results", "cassandra_naive_Q3.json"),
     )
     args = parser.parse_args()
 

@@ -137,7 +137,7 @@ def main():
     )
     parser.add_argument(
         "--output", type=str,
-        default=os.path.join("results", "mongodb_naive_Q3.json"),
+        default=os.path.join("../results", "mongodb_naive_Q3.json"),
         help="Path to save JSON results (default: results/mongodb_naive_Q3.json)",
     )
     args = parser.parse_args()
