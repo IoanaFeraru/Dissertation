@@ -1,3 +1,4 @@
+scipy
 graphviz
 # ============================================================
 # Dissertation — Python Dependencies

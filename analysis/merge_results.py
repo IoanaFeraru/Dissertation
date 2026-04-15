@@ -85,7 +85,7 @@ if __name__ == "__main__":
     input_folder = r"C:\Users\Ioana\Desktop\UNI\Anul 2\Dizertatie\Dissertation\benchmarks\cassandra\results\write"
 
     # Where to save the merged result (full path + filename)
-    output_file = r"C:\Users\Ioana\Desktop\UNI\Anul 2\Dizertatie\Dissertation\analysis\merged_cassandra_write.jsonl"
+    output_file = r"/analysis/write_results/merged_cassandra_write.jsonl"
 
     # Optional: Change file pattern if needed (e.g., "*_baseline.json", "q*.json")
     file_pattern = "*.json"  # Merges all .json files
