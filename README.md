@@ -18,7 +18,7 @@ The original contribution is the **two-factor decomposition of database performa
 ## Databases Compared
 
 | Database | Specialisation |
-|---|---|---|
+|---|---|
 | **PostgreSQL** | Relational baseline |
 | **MongoDB** | Document store |
 | **Apache Cassandra** | Wide-column store |
@@ -80,11 +80,6 @@ The dataset spans two years of synthetic transactional and behavioural data, see
 - Custom `harness.py` — configurable iteration count, warmup runs, concurrency via `threading.Barrier`, JSON output with full raw timing distributions
 - Statistical analysis: Welch's t-test (α = 0.05) + Cliff's delta effect size
 - Per-query result files (`db_schema_Qn.json`) storing p50/p95/p99, mean ± std dev, min/max, and the complete raw timing array
-
-**Analysis**
-- `analysis.py` — cross-database read query comparison
-- `write_analysis.py` — Q8 throughput and latency analysis
-- `scale_analysis.py` — scalability curve generation
 
 ---
 
